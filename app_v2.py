@@ -124,7 +124,9 @@ DEFAULT_EMPLOYEES = [
     {"OSOBA": "JAKUB RĘBACZ", "GRUPA": "GRUPA 4", "SYSTEM": "WTOREK-SOBOTA", "STANOWISKO": "MAGAZYNIER", "FUNKCJA": "1 SKANOWANIE"},
     {"OSOBA": "KYRYLO BZHEZITSKYI", "GRUPA": "GRUPA 1", "SYSTEM": "WTOREK-SOBOTA", "STANOWISKO": "BRYGADZISTA", "FUNKCJA": "1 SKANOWANIE"},
     {"OSOBA": "MACIEJ BORZĘCKI", "GRUPA": "GRUPA 3", "SYSTEM": "WTOREK-SOBOTA", "STANOWISKO": "MAGAZYNIER", "FUNKCJA": "1 SKANOWANIE"},
-    {"OSOBA": "MICHAŁ KWIATKOWSKI", "GRUPA": "GRUPA 7", "SYSTEM": "PONIEDZIAŁEK-PIĄTEK", "STANOWISKO": "KIEROWNIK", "FUNKCJA": "KIEROWNIK"}
+    {"OSOBA": "MICHAŁ KWIATKOWSKI", "GRUPA": "GRUPA 7", "SYSTEM": "PONIEDZIAŁEK-PIĄTEK", "STANOWISKO": "KIEROWNIK", "FUNKCJA": "KIEROWNIK"},
+    {"OSOBA": "VADZIM KARPUK", "GRUPA": "GRUPA 1", "SYSTEM": "WTOREK-SOBOTA", "STANOWISKO": "MAGAZYNIER", "FUNKCJA": "1 SKANOWANIE"},
+    {"OSOBA": "WOJTEK SZYMAŃSKI", "GRUPA": "GRUPA 2", "SYSTEM": "PONIEDZIAŁEK-PIĄTEK", "STANOWISKO": "MAGAZYNIER", "FUNKCJA": "2 SKANOWANIE"}
 ]
 
 # Stan sesji
@@ -324,7 +326,7 @@ with tab_gen:
                     except:
                         g_num = 1
                     
-                    # Logika zmian z uwzględnieniem brak rotacji dla grup 4 i 7
+                    # Logika zmian z uwzględnieniem braku rotacji dla grup 4 i 7
                     if g_num == 4:
                         czas_zmiany = "08:00-16:00"
                         shift_val = 4
@@ -372,7 +374,7 @@ with tab_gen:
                 })
                 
         st.session_state.current_schedule_df = pd.DataFrame(schedule_rows)
-        st.success(f"Wygenerowano harmonogram v2 na {period_key} zgodnie z nowymi regułami godzin i rotacji!")
+        st.success(f"Wygenerowano harmonogram v2 na {period_key} z pełną listą pracowników i regułami godzin!")
 
     schedule_editor_fragment()
 
