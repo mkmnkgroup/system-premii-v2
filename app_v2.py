@@ -213,11 +213,12 @@ def schedule_editor_fragment():
 # ==========================================
 # ZAKŁADKI GŁÓWNE
 # ==========================================
-tab_gen, tab_calc, tab_dash, tab_history, tab_settings = st.tabs([
+tab_gen, tab_calc, tab_dash, tab_history, tab_comp, tab_settings = st.tabs([
     "📋 Generator Harmonogramu", 
     "🧮 Kalkulator Premii", 
     "📊 Dashboard i Wykresy", 
     "📁 Archiwum Historyczne", 
+    "📈 Porównanie Wyników",
     "⚙️ Ustawienia Harmonogramu"
 ])
 
@@ -326,11 +327,9 @@ with tab_gen:
                     except:
                         g_num = 1
                     
-                    # Pobierz domyślny czas z tabeli grup dla grup niarotujących
                     matched_group_row = st.session_state.groups_df[st.session_state.groups_df["Nazwa grupy"].astype(str).str.strip().str.upper() == g_str.strip().upper()]
                     default_group_time = str(matched_group_row.iloc[0]["Czas pracy"]) if not matched_group_row.empty else "08:00-16:00"
 
-                    # Logika rotacji: tylko grupy 1, 2 i 3 rotują między sobą
                     if g_num in [1, 2, 3]:
                         shift_rotation = ((week_num - 1 + (g_num - 1)) % 3) + 1
                         shift_val = shift_rotation
@@ -341,11 +340,9 @@ with tab_gen:
                         else:
                             czas_zmiany = "11:00-19:00"
                     else:
-                        # Pozostałe grupy NIE rotują – pobierają stałe godziny z tabeli grup
                         czas_zmiany = default_group_time
                         shift_val = g_num
 
-                    # Obsługa specjalna (jeśli dotyczy)
                     if g_num == 8:
                         if date_str in maciej_early_days:
                             czas_zmiany = "06:00-14:00"
@@ -354,7 +351,6 @@ with tab_gen:
                             czas_zmiany = "07:30-15:30"
                             shift_val = 8
 
-                    # Globalne reguły dla dni tygodnia (Poniedziałek i Sobota)
                     if day_name == "poniedziałek":
                         czas_zmiany = "08:00-17:00"
                     elif day_name == "sobota":
@@ -452,10 +448,16 @@ with tab_calc:
                     "df": calc_df.copy(), 
                     "schedule_df": df_sched.copy(),
                     "indicator": indicator,
-                    "bonus_per_emp": max_bonus_per_emp
+                    "bonus_per_emp": max_bonus_per_emp,
+                    "actual_pcs": cur_pcs,
+                    "actual_lines": cur_lines,
+                    "actual_weight": cur_weight,
+                    "base_pcs": avg_pcs_12m,
+                    "base_lines": avg_lines_12m,
+                    "base_weight": avg_weight_12m
                 }
                 save_archive(st.session_state.history_v2)
-                st.success("Zapisano dane v2 do archiwum!")
+                st.success("Zapisano dane v2 do archiwum wraz z parametrami porównawczymi!")
         with colB:
             if not calc_df.empty:
                 pdf_bytes = generate_pdf_slips(calc_df, period_key, indicator)
@@ -492,7 +494,59 @@ with tab_history:
         st.info("Brak wpisów w archiwum v2.")
 
 # ==========================================
-# ZAKŁADKA 5: USTAWIENIA HARMONOGRAMU
+# ZAKŁADKA 5: PORÓWNANIE WYNIKÓW
+# ==========================================
+with tab_comp:
+    st.header("📈 Porównanie Parametrów i Wyników (Miesiąc do Miesiąca)")
+    st.markdown("Ta zakładka przedstawia zestawienie celów (bazowych średnich 12M) w stosunku do faktycznie osiągniętych wyników produkcyjnych we wszystkich zapisanych miesiącach.")
+
+    if st.session_state.history_v2:
+        comp_rows = []
+        for m_key, m_data in st.session_state.history_v2.items():
+            if "actual_pcs" in m_data:
+                comp_rows.append({
+                    "Miesiąc": m_key,
+                    "Cel Sztuki": m_data["base_pcs"],
+                    "Wynik Sztuki": m_data["actual_pcs"],
+                    "Cel Pozycje": m_data["base_lines"],
+                    "Wynik Pozycje": m_data["actual_lines"],
+                    "Cel Waga": m_data["base_weight"],
+                    "Wynik Waga": m_data["actual_weight"],
+                    "Wskaźnik Działu (%)": m_data["indicator"] * 100
+                })
+        
+        if comp_rows:
+            df_comp = pd.DataFrame(comp_rows)
+            st.subheader("Tabela Porównawcza Zestawienia Celów i Wyników")
+            st.dataframe(df_comp.style.format({
+                "Cel Sztuki": "{:,.2f}",
+                "Wynik Sztuki": "{:,.2f}",
+                "Cel Pozycje": "{:,.2f}",
+                "Wynik Pozycje": "{:,.2f}",
+                "Cel Waga": "{:,.2f}",
+                "Wynik Waga": "{:,.2f}",
+                "Wskaźnik Działu (%)": "{:.2f}%"
+            }), use_container_width=True)
+            
+            st.markdown("---")
+            st.subheader("Wykres Porównawczy (Cel vs Wynik)")
+            selected_param = st.selectbox("Wybierz parametr do analizy graficznej:", ["Sztuki", "Pozycje", "Waga łączna"])
+            
+            if selected_param == "Sztuki":
+                fig_comp = px.bar(df_comp, x="Miesiąc", y=["Cel Sztuki", "Wynik Sztuki"], barmode="group", title="Porównanie: Cel (12M) vs Wynik Rzeczywisty – Sztuki")
+            elif selected_param == "Pozycje":
+                fig_comp = px.bar(df_comp, x="Miesiąc", y=["Cel Pozycje", "Wynik Pozycje"], barmode="group", title="Porównanie: Cel (12M) vs Wynik Rzeczywisty – Pozycje przyjęte")
+            else:
+                fig_comp = px.bar(df_comp, x="Miesiąc", y=["Cel Waga", "Wynik Waga"], barmode="group", title="Porównanie: Cel (12M) vs Wynik Rzeczywisty – Waga łączna")
+                
+            st.plotly_chart(fig_comp, use_container_width=True)
+        else:
+            st.info("Zapisz bieżący miesiąc z wgranym plikiem produkcyjnym w zakładce *Kalkulator Premii*, aby zasilić tę tablicę porównawczą.")
+    else:
+        st.info("Brak zapisanych danych w archiwum v2. Wygeneruj i zapisz co najmniej jeden miesiąc.")
+
+# ==========================================
+# ZAKŁADKA 6: USTAWIENIA HARMONOGRAMU
 # ==========================================
 with tab_settings:
     st.header("⚙️ Konfiguracja i Ustawienia Harmonogramu")
