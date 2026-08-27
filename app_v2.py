@@ -261,7 +261,6 @@ with tab_gen:
         pl_holidays = holidays.Poland(years=gen_year)
         
         maciej_early_days = set()
-        # Wyszukaj pracownika o imieniu zawierającym Maciej Borzęcki w nowej tabeli ustawień
         maciej_emp = None
         for _, row_emp in st.session_state.employees_df.iterrows():
             if "BORZĘCKI" in str(row_emp["OSOBA"]).upper() or "MACIEJ" in str(row_emp["OSOBA"]).upper():
@@ -285,7 +284,6 @@ with tab_gen:
                     is_working_day = False
                 
                 if is_working_day:
-                    # Próba sparsowania numeru grupy jako int, jeśli się da
                     try:
                         g_num = int(str(maciej_emp["GRUPA"]).replace("GRUPA", "").strip())
                     except:
@@ -321,36 +319,43 @@ with tab_gen:
                     shift_val = "Wolne"
                 else:
                     g_str = str(emp["GRUPA"])
-                    # Pobierz czas pracy zdefiniowany w tabeli grup
-                    matched_group_row = st.session_state.groups_df[st.session_state.groups_df["Nazwa grupy"].astype(str).str.strip().str.upper() == g_str.strip().upper()]
-                    if not matched_group_row.empty:
-                        czas_zmiany = str(matched_group_row.iloc[0]["Czas pracy"])
-                    else:
-                        czas_zmiany = "08:00-16:00"
-                    
                     try:
                         g_num = int(g_str.replace("GRUPA", "").strip())
                     except:
                         g_num = 1
-                        
+                    
+                    # Logika zmian z uwzględnieniem brak rotacji dla grup 4 i 7
                     if g_num == 4:
+                        czas_zmiany = "08:00-16:00"
                         shift_val = 4
                     elif g_num == 7:
+                        czas_zmiany = "08:00-17:00"
                         shift_val = 7
                     elif g_num == 8:
                         if date_str in maciej_early_days:
                             czas_zmiany = "06:00-14:00"
                             shift_val = 1
                         else:
+                            czas_zmiany = "07:30-15:30"
                             shift_val = 8
                     else:
+                        # Pozostałe grupy rotują normalnie
                         shift_rotation = ((week_num - 1 + (g_num - 1)) % 4) + 1
                         shift_val = shift_rotation
+                        if shift_rotation == 1:
+                            czas_zmiany = "06:00-14:00"
+                        elif shift_rotation == 2:
+                            czas_zmiany = "08:00-16:00"
+                        elif shift_rotation == 3:
+                            czas_zmiany = "11:00-19:00"
+                        else:
+                            czas_zmiany = "08:00-17:00"
 
-                    if day_name == "poniedziałek" and g_num != 7: # przykładowe zachowanie poniedziałkowe jeśli dotyczy
-                        pass 
-                    if day_name == "sobota":
-                        pass
+                    # Globalne reguły dla dni tygodnia (Poniedziałek i Sobota)
+                    if day_name == "poniedziałek":
+                        czas_zmiany = "08:00-17:00"
+                    elif day_name == "sobota":
+                        czas_zmiany = "08:00-16:00"
 
                 schedule_rows.append({
                     "DATA": date_str,
@@ -367,7 +372,7 @@ with tab_gen:
                 })
                 
         st.session_state.current_schedule_df = pd.DataFrame(schedule_rows)
-        st.success(f"Wygenerowano harmonogram v2 na {period_key} w oparciu o aktualne ustawienia!")
+        st.success(f"Wygenerowano harmonogram v2 na {period_key} zgodnie z nowymi regułami godzin i rotacji!")
 
     schedule_editor_fragment()
 
@@ -501,7 +506,6 @@ with tab_settings:
         st.subheader("Modyfikacja powodów nieobecności")
         st.caption("Dodawaj nowe pozycje bezpośrednio w tabeli, edytuj istniejące lub usuwaj zaznaczone wiersze.")
         
-        # Przekształcenie listy na DataFrame do edycji w st.data_editor
         df_reasons_editable = pd.DataFrame({"Powód nieobecności": st.session_state.absence_reasons})
         edited_reasons_df = st.data_editor(
             df_reasons_editable,
@@ -509,7 +513,6 @@ with tab_settings:
             use_container_width=True,
             key="editor_absence_reasons"
         )
-        # Zapisz z powrotem do listy w session_state
         if not edited_reasons_df.empty:
             st.session_state.absence_reasons = edited_reasons_df["Powód nieobecności"].dropna().astype(str).tolist()
 
@@ -531,7 +534,6 @@ with tab_settings:
         st.subheader("Modyfikacja pracowników, grup i stanowisk")
         st.caption("Zarządzaj zespołem, przypisuj grupy, przedziały dni pracujących (system), stanowiska i funkcje.")
         
-        # Pobierz aktualne nazwy grup jako opcje wyboru dla kolumny Grupa
         available_group_names = st.session_state.groups_df["Nazwa grupy"].dropna().astype(str).tolist()
         
         edited_employees_df = st.data_editor(
