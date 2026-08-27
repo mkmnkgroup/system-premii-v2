@@ -1,185 +1,557 @@
-import io
-import datetime
-import pandas as pd
-import plotly.express as px
 import streamlit as st
+import pandas as pd
+from datetime import datetime
+import calendar
+import os
+import pickle
+import holidays
+import plotly.express as px
+from fpdf import FPDF
+import tempfile
 
-# -----------------------------------------------------------------------------
-# 1. KONFIGURACJA STRONY
-# -----------------------------------------------------------------------------
-st.set_page_config(
-    page_title="System Harmonogramu Pracy",
-    page_icon="📅",
-    layout="wide"
-)
+# ==========================================
+# KONFIGURACJA I CSS - V2
+# ==========================================
+st.set_page_config(page_title="System Rozliczania Harmonogramów v2", layout="wide", page_icon="📈")
 
-# -----------------------------------------------------------------------------
-# 2. INICJALIZACJA BAZY DANYCH (SESSION STATE)
-# -----------------------------------------------------------------------------
-if "nieobecnosci" not in st.session_state:
-    st.session_state.nieobecnosci = pd.DataFrame({
-        "Powód nieobecności": [
-            "Urlop wypoczynkowy",
-            "L4 / Zwolnienie lekarskie",
-            "Urlop na żądanie",
-            "Opieka nad dzieckiem",
-            "Nieobecność usprawiedliwiona"
-        ]
-    })
+st.markdown("""
+    <style>
+    .stApp { background-color: #f8f9fa; }
+    div.stButton > button { border-radius: 5px; border: 1px solid #ddd; }
+    div.stDataFrame { border-radius: 10px; }
+    h1, h2, h3 { color: #1e3a8a; }
+    </style>
+""", unsafe_allow_html=True)
 
-if "grupy" not in st.session_state:
-    st.session_state.grupy = pd.DataFrame([
-        {"Nazwa grupy": "GRUPA 1", "Czas pracy": "06:00-14:00"},
-        {"Nazwa grupy": "GRUPA 2", "Czas pracy": "08:00-16:00"},
-        {"Nazwa grupy": "GRUPA 3", "Czas pracy": "11:00-19:00"},
-        {"Nazwa grupy": "GRUPA 4", "Czas pracy": "08:00-16:00"},
-        {"Nazwa grupy": "GRUPA 5", "Czas pracy": "08:00-16:00"},
-        {"Nazwa grupy": "GRUPA 6", "Czas pracy": "11:00-19:00"},
-        {"Nazwa grupy": "GRUPA 7", "Czas pracy": "08:00-17:00"}
-    ])
+# ==========================================
+# FUNKCJE POMOCNICZE
+# ==========================================
+ARCHIVE_FILE = "archiwum_premii_v2.pkl"
 
-if "pracownicy" not in st.session_state:
-    st.session_state.pracownicy = pd.DataFrame([
-        {"Imię i nazwisko": "ADRIAN WRONA", "Grupa": "GRUPA 4", "Przedział dni pracujących": "WTOREK-SOBOTA", "Stanowisko": "MAGAZYNIER", "Funkcja": "1 SKANOWANIE"},
-        {"Imię i nazwisko": "ANTON FEDOSOV", "Grupa": "GRUPA 3", "Przedział dni pracujących": "PONIEDZIAŁEK-PIĄTEK", "Stanowisko": "MAGAZYNIER", "Funkcja": "1 SKANOWANIE"},
-        {"Imię i nazwisko": "JAKUB JANECZEK", "Grupa": "GRUPA 2", "Przedział dni pracujących": "PONIEDZIAŁEK-PIĄTEK", "Stanowisko": "BRYGADZISTA", "Funkcja": "2 SKANOWANIE"},
-        {"Imię i nazwisko": "JAKUB RĘBACZ", "Grupa": "GRUPA 4", "Przedział dni pracujących": "WTOREK-SOBOTA", "Stanowisko": "MAGAZYNIER", "Funkcja": "1 SKANOWANIE"},
-        {"Imię i nazwisko": "KYRYLO BZHEZITSKYI", "Grupa": "GRUPA 1", "Przedział dni pracujących": "WTOREK-SOBOTA", "Stanowisko": "BRYGADZISTA", "Funkcja": "1 SKANOWANIE"},
-        {"Imię i nazwisko": "MACIEJ BORZĘCKI", "Grupa": "GRUPA 3", "Przedział dni pracujących": "WTOREK-SOBOTA", "Stanowisko": "MAGAZYNIER", "Funkcja": "1 SKANOWANIE"},
-        {"Imię i nazwisko": "MICHAŁ KWIATKOWSKI", "Grupa": "GRUPA 7", "Przedział dni pracujących": "PONIEDZIAŁEK-PIĄTEK", "Stanowisko": "KIEROWNIK", "Funkcja": "KIEROWNIK"}
-    ])
+def load_archive():
+    if os.path.exists(ARCHIVE_FILE):
+        try:
+            with open(ARCHIVE_FILE, "rb") as f: 
+                return pickle.load(f)
+        except: 
+            return {}
+    return {}
 
-# -----------------------------------------------------------------------------
-# 3. NAWIGACJA GŁÓWNA
-# -----------------------------------------------------------------------------
-st.title("📅 System Zarządzania Harmonogramem")
+def save_archive(archive_data):
+    with open(ARCHIVE_FILE, "wb") as f: 
+        pickle.dump(archive_data, f)
 
-main_tab1, main_tab2, main_tab3 = st.tabs([
-    "📋 Harmonogram Główny", 
-    "📊 Statystyki i Raporty", 
-    "⚙️ Ustawienia"
+def remove_pl_chars(text):
+    replacements = {
+        'ą':'a', 'ć':'c', 'ę':'e', 'ł':'l', 'ń':'n', 'ó':'o', 'ś':'s', 'ź':'z', 'ż':'z',
+        'Ą':'A', 'Ć':'C', 'Ę':'E', 'Ł':'L', 'Ń':'N', 'Ó':'O', 'Ś':'S', 'Ź':'Z', 'Ż':'Z'
+    }
+    for k, v in replacements.items(): 
+        text = str(text).replace(k, v)
+    return text
+
+def generate_pdf_slips(calc_df, period, indicator):
+    pdf = FPDF()
+    for idx, row in calc_df.iterrows():
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 16)
+        pdf.cell(200, 10, txt=remove_pl_chars(f"PASEK PREMIOWY v2 - {period}"), ln=True, align='C')
+        pdf.ln(10)
+        
+        pdf.set_font("Arial", '', 12)
+        pdf.cell(200, 10, txt=remove_pl_chars(f"Pracownik: {row['Pracownik']}"), ln=True)
+        pdf.cell(200, 10, txt=remove_pl_chars(f"Stanowisko: {row['Stanowisko']}"), ln=True)
+        pdf.ln(5)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(10)
+        
+        pdf.cell(200, 10, txt=remove_pl_chars(f"Wskaznik dzialu: {indicator*100:.2f}%"), ln=True)
+        pdf.cell(200, 10, txt=remove_pl_chars(f"Liczba nieobecnosci: {row['Liczba nieobecności']}"), ln=True)
+        pdf.cell(200, 10, txt=remove_pl_chars("Potracenia za nieobecnosci: BRAK (0%)"), ln=True)
+        
+        pdf.ln(10)
+        pdf.set_font("Arial", 'B', 14)
+        pdf.cell(200, 10, txt=remove_pl_chars(f"DO WYPLATY (NETTO): {row['Premia netto (PLN)']:.2f} PLN"), ln=True)
+        
+        pdf.ln(20)
+        pdf.set_font("Arial", 'I', 10)
+        pdf.cell(200, 10, txt=remove_pl_chars("Wygenerowano z Systemu Rozliczania Harmonogramow v2. Dokument wewnetrzny."), ln=True)
+        
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        pdf.output(tmp.name)
+        with open(tmp.name, "rb") as f: 
+            data = f.read()
+    os.remove(tmp.name)
+    return data
+
+def get_col_sum_flexible(df, possible_names):
+    if df.empty:
+        return 0.0
+    for col in df.columns:
+        if str(col).strip().lower() in [p.lower() for p in possible_names]:
+            return float(pd.to_numeric(df[col], errors='coerce').fillna(0).sum())
+    return 0.0
+
+DEFAULT_ABSENCE_REASONS = [
+    "Brak",
+    "CHOROBOWE",
+    "URLOP BEZPŁATNY",
+    "URLOP WYPOCZYNKOWY",
+    "WOLNE ZA SOBOTĘ",
+    "ŚWIĘTO",
+    "URLOP NA ŻĄDANIE",
+    "PRACUJĄCA SOBOTA",
+    "NIEOBECNOŚĆ NIEUSPRAWIEDLIWIONA",
+    "KRWIODAWSTWO",
+    "NIEOBECNOŚĆ USPRAWIEDLIWIONA",
+    "ODEBRANE ZA ŚWIĘTO"
+]
+
+DEFAULT_GROUPS = [
+    {"Nazwa grupy": "GRUPA 1", "Czas pracy": "06:00-14:00"},
+    {"Nazwa grupy": "GRUPA 2", "Czas pracy": "08:00-16:00"},
+    {"Nazwa grupy": "GRUPA 3", "Czas pracy": "11:00-19:00"},
+    {"Nazwa grupy": "GRUPA 4", "Czas pracy": "08:00-16:00"},
+    {"Nazwa grupy": "GRUPA 5", "Czas pracy": "08:00-16:00"},
+    {"Nazwa grupy": "GRUPA 6", "Czas pracy": "11:00-19:00"},
+    {"Nazwa grupy": "GRUPA 7", "Czas pracy": "08:00-17:00"}
+]
+
+DEFAULT_EMPLOYEES = [
+    {"OSOBA": "ADRIAN WRONA", "GRUPA": "GRUPA 4", "SYSTEM": "WTOREK-SOBOTA", "STANOWISKO": "MAGAZYNIER", "FUNKCJA": "1 SKANOWANIE"},
+    {"OSOBA": "ANTON FEDOSOV", "GRUPA": "GRUPA 3", "SYSTEM": "PONIEDZIAŁEK-PIĄTEK", "STANOWISKO": "MAGAZYNIER", "FUNKCJA": "1 SKANOWANIE"},
+    {"OSOBA": "JAKUB JANECZEK", "GRUPA": "GRUPA 2", "SYSTEM": "PONIEDZIAŁEK-PIĄTEK", "STANOWISKO": "BRYGADZISTA", "FUNKCJA": "2 SKANOWANIE"},
+    {"OSOBA": "JAKUB RĘBACZ", "GRUPA": "GRUPA 4", "SYSTEM": "WTOREK-SOBOTA", "STANOWISKO": "MAGAZYNIER", "FUNKCJA": "1 SKANOWANIE"},
+    {"OSOBA": "KYRYLO BZHEZITSKYI", "GRUPA": "GRUPA 1", "SYSTEM": "WTOREK-SOBOTA", "STANOWISKO": "BRYGADZISTA", "FUNKCJA": "1 SKANOWANIE"},
+    {"OSOBA": "MACIEJ BORZĘCKI", "GRUPA": "GRUPA 3", "SYSTEM": "WTOREK-SOBOTA", "STANOWISKO": "MAGAZYNIER", "FUNKCJA": "1 SKANOWANIE"},
+    {"OSOBA": "MICHAŁ KWIATKOWSKI", "GRUPA": "GRUPA 7", "SYSTEM": "PONIEDZIAŁEK-PIĄTEK", "STANOWISKO": "KIEROWNIK", "FUNKCJA": "KIEROWNIK"}
+]
+
+# Stan sesji
+if 'history_v2' not in st.session_state: 
+    st.session_state.history_v2 = load_archive()
+if 'current_schedule_df' not in st.session_state: 
+    st.session_state.current_schedule_df = pd.DataFrame()
+if 'absence_reasons' not in st.session_state: 
+    st.session_state.absence_reasons = DEFAULT_ABSENCE_REASONS.copy()
+if 'groups_df' not in st.session_state:
+    st.session_state.groups_df = pd.DataFrame(DEFAULT_GROUPS)
+if 'employees_df' not in st.session_state:
+    st.session_state.employees_df = pd.DataFrame(DEFAULT_EMPLOYEES)
+
+# ==========================================
+# FRAGMENT EDYTORWY
+# ==========================================
+@st.fragment
+def schedule_editor_fragment():
+    if not st.session_state.current_schedule_df.empty:
+        col_btn, _ = st.columns([1, 3])
+        with col_btn:
+            if st.button("⏱️ Uzupełnij godziny pracy", use_container_width=True):
+                def fill_start(row):
+                    if row["NIEOBECNOŚĆ"] != "Brak":
+                        return "NIEOBECNY"
+                    val_str = str(row["CZAS ZMIANY"]).strip()
+                    if "-" in val_str and val_str != "Wolne":
+                        return val_str.split("-")[0].strip()
+                    return ""
+
+                def fill_end(row):
+                    if row["NIEOBECNOŚĆ"] != "Brak":
+                        return "NIEOBECNY"
+                    val_str = str(row["CZAS ZMIANY"]).strip()
+                    if "-" in val_str and val_str != "Wolne":
+                        return val_str.split("-")[1].strip()
+                    return ""
+
+                st.session_state.current_schedule_df["GODZINA ROZPOCZĘCIA"] = st.session_state.current_schedule_df.apply(fill_start, axis=1)
+                st.session_state.current_schedule_df["GODZINA ZAKOŃCZENIA"] = st.session_state.current_schedule_df.apply(fill_end, axis=1)
+                st.success("Automatycznie uzupełniono godziny pracy oraz nieobecności!")
+
+        edited_df = st.data_editor(
+            st.session_state.current_schedule_df,
+            column_config={
+                "NIEOBECNOŚĆ": st.column_config.SelectboxColumn(
+                    "NIEOBECNOŚĆ",
+                    options=st.session_state.absence_reasons,
+                    required=True,
+                    help="Wybierz powód nieobecności"
+                )
+            },
+            use_container_width=True,
+            num_rows="fixed",
+            key="schedule_editor"
+        )
+
+        mask_absent = edited_df["NIEOBECNOŚĆ"] != "Brak"
+        edited_df.loc[mask_absent, "GODZINA ROZPOCZĘCIA"] = "NIEOBECNY"
+        edited_df.loc[mask_absent, "GODZINA ZAKOŃCZENIA"] = "NIEOBECNY"
+
+        def restore_start(row):
+            if row["NIEOBECNOŚĆ"] == "Brak" and row["GODZINA ROZPOCZĘCIA"] == "NIEOBECNY":
+                val_str = str(row["CZAS ZMIANY"]).strip()
+                if "-" in val_str and val_str != "Wolne":
+                    return val_str.split("-")[0].strip()
+                return ""
+            return row["GODZINA ROZPOCZĘCIA"]
+
+        def restore_end(row):
+            if row["NIEOBECNOŚĆ"] == "Brak" and row["GODZINA ZAKOŃCZENIA"] == "NIEOBECNY":
+                val_str = str(row["CZAS ZMIANY"]).strip()
+                if "-" in val_str and val_str != "Wolne":
+                    return val_str.split("-")[1].strip()
+                return ""
+            return row["GODZINA ZAKOŃCZENIA"]
+
+        edited_df["GODZINA ROZPOCZĘCIA"] = edited_df.apply(restore_start, axis=1)
+        edited_df["GODZINA ZAKOŃCZENIA"] = edited_df.apply(restore_end, axis=1)
+
+        st.session_state.current_schedule_df = edited_df
+
+# ==========================================
+# ZAKŁADKI GŁÓWNE
+# ==========================================
+tab_gen, tab_calc, tab_dash, tab_history, tab_settings = st.tabs([
+    "📋 Generator Harmonogramu", 
+    "🧮 Kalkulator Premii", 
+    "📊 Dashboard i Wykresy", 
+    "📁 Archiwum Historyczne", 
+    "⚙️ Ustawienia Harmonogramu"
 ])
 
-# -----------------------------------------------------------------------------
-# TAB 1: HARMONOGRAM GŁÓWNY
-# -----------------------------------------------------------------------------
-with main_tab1:
-    st.header("Podgląd Harmonogramu")
-    
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        wybrany_miesiac = st.date_input("Wybierz miesiąc/rok", value=datetime.date.today())
-        st.info(f"Wybrany okres: **{wybrany_miesiac.strftime('%B %Y')}**")
-    
-    # Łączenie danych pracowników z informacją o godzinach grupy
-    df_merged = st.session_state.pracownicy.merge(
-        st.session_state.grupy, 
-        left_on="Grupa", 
-        right_on="Nazwa grupy", 
-        how="left"
-    ).drop(columns=["Nazwa grupy"], errors="ignore")
-    
-    st.subheader("Bieżąca obsada zespołu")
-    st.dataframe(df_merged, use_container_width=True)
+PL_DAYS = {0: "poniedziałek", 1: "wtorek", 2: "środa", 3: "czwartek", 4: "piątek", 5: "sobota", 6: "niedziela"}
 
-    # Funkcja generująca plik Excel do pobrania
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df_merged.to_excel(writer, index=False, sheet_name="Harmonogram")
-    
-    st.download_button(
-        label="📥 Pobierz Harmonogram (Excel)",
-        data=output.getvalue(),
-        file_name=f"harmonogram_{wybrany_miesiac.strftime('%Y_%m')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+# Panel boczny - Ustawienia Okresu
+st.sidebar.title("⚙️ Wersja v2")
+st.sidebar.header("Ustawienia Okresu")
+months_list = ["Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec", "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"]
+gen_month_name = st.sidebar.selectbox("Miesiąc:", months_list, index=datetime.now().month - 1)
+gen_month_idx = months_list.index(gen_month_name) + 1
+gen_year = st.sidebar.number_input("Rok:", value=datetime.now().year, step=1)
+period_key = f"{gen_month_name} {gen_year}"
 
-# -----------------------------------------------------------------------------
-# TAB 2: STATYSTYKI I RAPORTY
-# -----------------------------------------------------------------------------
-with main_tab2:
-    st.header("Podsumowanie zespołu")
-    
-    if not st.session_state.pracownicy.empty:
-        col_chart1, col_chart2 = st.columns(2)
+# Panel boczny - Wgrywanie plików z produkcją
+st.sidebar.markdown("---")
+st.sidebar.header("📁 Wgrywanie Danych z Produkcji")
+uploaded_month_file = st.sidebar.file_uploader("Główny plik z produkcją (Sztuki, Pozycje przyjęte, Waga):", type=["xlsx", "xls"])
+
+# Panel boczny - Edycja Średnich 12M i Wag Parametrów
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ Parametry i Wagi Premiowe")
+
+with st.sidebar.expander("📊 Edycja Wag i Średnich 12M", expanded=True):
+    avg_lines_12m = st.number_input("Średnia 12M (Pozycje przyjęte):", value=23883.83, step=100.0, format="%.2f")
+    w_lines = st.number_input("Waga % (Pozycje przyjęte):", value=37.50, step=0.01, format="%.2f")
+
+    avg_pcs_12m = st.number_input("Średnia 12M (Sztuki):", value=82217.25, step=100.0, format="%.2f")
+    w_pcs = st.number_input("Waga % (Sztuki):", value=31.25, step=0.01, format="%.2f")
+
+    avg_weight_12m = st.number_input("Średnia 12M (Waga łączna):", value=35726.91, step=100.0, format="%.2f")
+    w_weight = st.number_input("Waga % (Waga łączna):", value=31.25, step=0.01, format="%.2f")
+
+    total_w = w_pcs + w_lines + w_weight
+    st.caption(f"Suma wag: **{total_w:.2f}%**")
+
+# ==========================================
+# ZAKŁADKA 1: HARMONOGRAM
+# ==========================================
+with tab_gen:
+    if st.sidebar.button("🚀 Generuj harmonogram", type="primary"):
+        days_in_month = calendar.monthrange(gen_year, gen_month_idx)[1]
+        pl_holidays = holidays.Poland(years=gen_year)
         
-        with col_chart1:
-            st.subheader("Podział wg Stanowisk")
-            fig_stanowiska = px.pie(
-                st.session_state.pracownicy, 
-                names="Stanowisko", 
-                title="Struktura stanowisk"
-            )
-            st.plotly_chart(fig_stanowiska, use_container_width=True)
-            
-        with col_chart2:
-            st.subheader("Liczebność Grup")
-            fig_grupy = px.bar(
-                st.session_state.pracownicy["Grupa"].value_counts().reset_index(),
-                x="Grupa", 
-                y="count",
-                labels={"count": "Liczba pracowników", "Grupa": "Grupa"},
-                title="Liczba osób w grupach"
-            )
-            st.plotly_chart(fig_grupy, use_container_width=True)
-    else:
-        st.warning("Brak danych o pracownikach do wyświetlenia statystyk.")
+        maciej_early_days = set()
+        # Wyszukaj pracownika o imieniu zawierającym Maciej Borzęcki w nowej tabeli ustawień
+        maciej_emp = None
+        for _, row_emp in st.session_state.employees_df.iterrows():
+            if "BORZĘCKI" in str(row_emp["OSOBA"]).upper() or "MACIEJ" in str(row_emp["OSOBA"]).upper():
+                maciej_emp = row_emp
+                break
+        
+        if maciej_emp is not None:
+            for day in range(1, days_in_month + 1):
+                date_obj = datetime(gen_year, gen_month_idx, day)
+                day_name = PL_DAYS[date_obj.weekday()]
+                week_num = date_obj.isocalendar()[1]
+                is_holiday = date_obj in pl_holidays
+                
+                is_working_day = True
+                sys_val = str(maciej_emp["SYSTEM"])
+                if "PONIEDZIAŁEK" in sys_val.upper() and day_name in ["sobota", "niedziela"]:
+                    is_working_day = False
+                elif "WTOREK" in sys_val.upper() and day_name in ["niedziela", "poniedziałek"]:
+                    is_working_day = False
+                if is_holiday:
+                    is_working_day = False
+                
+                if is_working_day:
+                    # Próba sparsowania numeru grupy jako int, jeśli się da
+                    try:
+                        g_num = int(str(maciej_emp["GRUPA"]).replace("GRUPA", "").strip())
+                    except:
+                        g_num = 1
+                    shift_rotation = ((week_num - 1 + (g_num - 1)) % 4) + 1
+                    if shift_rotation == 1:
+                        maciej_early_days.add(date_obj.strftime("%d.%m.%Y"))
 
-# -----------------------------------------------------------------------------
-# TAB 3: KARTA USTAWIEŃ
-# -----------------------------------------------------------------------------
-with main_tab3:
-    st.header("⚙️ Konfiguracja Modułów")
+        schedule_rows = []
+        
+        for day in range(1, days_in_month + 1):
+            date_obj = datetime(gen_year, gen_month_idx, day)
+            date_str = date_obj.strftime("%d.%m.%Y")
+            day_name = PL_DAYS[date_obj.weekday()]
+            week_num = date_obj.isocalendar()[1]
+            is_holiday = date_obj in pl_holidays
+            
+            for _, emp in st.session_state.employees_df.iterrows():
+                is_working_day = True
+                sys_val = str(emp["SYSTEM"])
+                
+                if "PONIEDZIAŁEK" in sys_val.upper() and day_name in ["sobota", "niedziela"]:
+                    is_working_day = False
+                elif "WTOREK" in sys_val.upper() and day_name in ["niedziela", "poniedziałek"]:
+                    is_working_day = False
+                if is_holiday:
+                    is_working_day = False
+                
+                status_dzien = "Święto" if is_holiday else ("Pracujący" if is_working_day else "Wolny")
+                
+                if not is_working_day:
+                    czas_zmiany = "Wolne"
+                    shift_val = "Wolne"
+                else:
+                    g_str = str(emp["GRUPA"])
+                    # Pobierz czas pracy zdefiniowany w tabeli grup
+                    matched_group_row = st.session_state.groups_df[st.session_state.groups_df["Nazwa grupy"].astype(str).str.strip().str.upper() == g_str.strip().upper()]
+                    if not matched_group_row.empty:
+                        czas_zmiany = str(matched_group_row.iloc[0]["Czas pracy"])
+                    else:
+                        czas_zmiany = "08:00-16:00"
+                    
+                    try:
+                        g_num = int(g_str.replace("GRUPA", "").strip())
+                    except:
+                        g_num = 1
+                        
+                    if g_num == 4:
+                        shift_val = 4
+                    elif g_num == 7:
+                        shift_val = 7
+                    elif g_num == 8:
+                        if date_str in maciej_early_days:
+                            czas_zmiany = "06:00-14:00"
+                            shift_val = 1
+                        else:
+                            shift_val = 8
+                    else:
+                        shift_rotation = ((week_num - 1 + (g_num - 1)) % 4) + 1
+                        shift_val = shift_rotation
+
+                    if day_name == "poniedziałek" and g_num != 7: # przykładowe zachowanie poniedziałkowe jeśli dotyczy
+                        pass 
+                    if day_name == "sobota":
+                        pass
+
+                schedule_rows.append({
+                    "DATA": date_str,
+                    "DZIEŃ TYGODNIA": day_name,
+                    "OSOBA": emp["OSOBA"],
+                    "STANOWISKO": emp["STANOWISKO"],
+                    "ZMIANA": shift_val if not is_holiday else "Święto",
+                    "CZAS ZMIANY": czas_zmiany,
+                    "DZIEŃ PRACUJĄCY/WOLNY": status_dzien,
+                    "GODZINA ROZPOCZĘCIA": "",
+                    "GODZINA ZAKOŃCZENIA": "",
+                    "NIEOBECNOŚĆ": "Brak",
+                    "NADGODZINY (godz.)": 0.0
+                })
+                
+        st.session_state.current_schedule_df = pd.DataFrame(schedule_rows)
+        st.success(f"Wygenerowano harmonogram v2 na {period_key} w oparciu o aktualne ustawienia!")
+
+    schedule_editor_fragment()
+
+# ==========================================
+# ZAKŁADKA 2: KALKULATOR PREMII
+# ==========================================
+with tab_calc:
+    st.header("🧮 Kalkulator Premii v2 (Bez potrąceń i pakowania)")
     
-    sub_tab1, sub_tab2, sub_tab3 = st.tabs([
+    if st.session_state.current_schedule_df.empty:
+        st.warning("Najpierw wygeneruj harmonogram w pierwszej zakładce!")
+    else:
+        base_salary, step_bonus_pct = 4300.0, 0.04
+
+        w_pcs_frac = w_pcs / 100.0
+        w_lines_frac = w_lines / 100.0
+        w_weight_frac = w_weight / 100.0
+
+        prod_df = pd.DataFrame()
+        if uploaded_month_file is not None:
+            ext = uploaded_month_file.name.split('.')[-1].lower()
+            prod_df = pd.read_excel(uploaded_month_file, engine='xlrd' if ext == 'xls' else 'openpyxl')
+
+        df_sched = st.session_state.current_schedule_df
+
+        cur_pcs, cur_lines, cur_weight = 0.0, 0.0, 0.0
+
+        if not prod_df.empty:
+            cur_pcs = get_col_sum_flexible(prod_df, ['Sztuki', 'sztuka'])
+            cur_lines = get_col_sum_flexible(prod_df, ['pozycje', 'Pozycje'])
+            cur_weight = get_col_sum_flexible(prod_df, ['Waga łączna', 'Waga laczna', 'Waga'])
+
+        dev_pcs = (cur_pcs - avg_pcs_12m) / avg_pcs_12m if avg_pcs_12m > 0 else 0.0
+        dev_lines = (cur_lines - avg_lines_12m) / avg_lines_12m if avg_lines_12m > 0 else 0.0
+        dev_weight = (cur_weight - avg_weight_12m) / avg_weight_12m if avg_weight_12m > 0 else 0.0
+        
+        indicator = (dev_pcs * w_pcs_frac + dev_lines * w_lines_frac + dev_weight * w_weight_frac)
+        full_steps = max(0, int(indicator // 0.10)) if indicator > 0 else 0
+        bonus_rate = full_steps * step_bonus_pct
+        max_bonus_per_emp = base_salary * bonus_rate
+
+        summary_list = []
+        for name, group in df_sched.groupby("OSOBA"):
+            dni_nieobecne = 0
+            for _, row in group.iterrows():
+                if row.get("DZIEŃ PRACUJĄCY/WOLNY") == "Pracujący" and row.get("NIEOBECNOŚĆ", "Brak") != "Brak":
+                    dni_nieobecne += 1
+
+            summary_list.append({
+                "Pracownik": name,
+                "Stanowisko": group["STANOWISKO"].iloc[0],
+                "Liczba nieobecności": dni_nieobecne,
+                "Premia netto (PLN)": max_bonus_per_emp
+            })
+            
+        calc_df = pd.DataFrame(summary_list)
+        st.session_state.current_calc_df = calc_df
+        st.session_state.current_indicator = indicator
+
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric("Wskaźnik Wykonania Działu", f"{indicator*100:.2f}%")
+        col_m2.metric("Stawka Premii", f"{bonus_rate*100:.1f}%")
+        col_m3.metric("Premia na pracownika", f"{max_bonus_per_emp:.2f} PLN")
+
+        st.subheader("Rozliczenie Premiowe Pracowników (v2)")
+        st.dataframe(calc_df.style.format({
+            "Premia netto (PLN)": "{:.2f} zł"
+        }), use_container_width=True)
+
+        colA, colB = st.columns(2)
+        with colA:
+            if st.button("💾 Zapisz do archiwum (v2)", type="primary"):
+                st.session_state.history_v2[period_key] = {
+                    "df": calc_df.copy(), 
+                    "schedule_df": df_sched.copy(),
+                    "indicator": indicator,
+                    "bonus_per_emp": max_bonus_per_emp
+                }
+                save_archive(st.session_state.history_v2)
+                st.success("Zapisano dane v2 do archiwum!")
+        with colB:
+            if not calc_df.empty:
+                pdf_bytes = generate_pdf_slips(calc_df, period_key, indicator)
+                st.download_button(
+                    label="📄 Pobierz paski premiowe (PDF v2)", 
+                    data=pdf_bytes, 
+                    file_name=f"Paski_Premiowe_v2_{period_key}.pdf", 
+                    mime="application/pdf"
+                )
+
+# ==========================================
+# ZAKŁADKA 3: DASHBOARD I WYKRESY
+# ==========================================
+with tab_dash:
+    st.header("📊 Dashboard Analityczny v2")
+    if st.session_state.history_v2:
+        hist_data = [{"Miesiąc": k, "Wskaźnik (%)": v["indicator"] * 100, "Premia (PLN)": v.get("bonus_per_emp", 0.0)} for k, v in st.session_state.history_v2.items()]
+        df_trend = pd.DataFrame(hist_data)
+        fig = px.line(df_trend, x="Miesiąc", y="Wskaźnik (%)", markers=True, title="Historia Wskaźnika Premiowego Działu (v2)")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Brak zapisanych miesięcy w archiwum v2. Wygeneruj i zapisz miesiąc, aby wyświetlić trendy.")
+
+# ==========================================
+# ZAKŁADKA 4: ARCHIWUM
+# ==========================================
+with tab_history:
+    st.header("📁 Archiwum Historyczne v2")
+    if st.session_state.history_v2:
+        selected_hist = st.selectbox("Wybierz miesiąc z bazy v2:", list(st.session_state.history_v2.keys()))
+        hist_data = st.session_state.history_v2[selected_hist]
+        st.dataframe(hist_data["df"].style.format({"Premia netto (PLN)": "{:.2f} zł"}), use_container_width=True)
+    else:
+        st.info("Brak wpisów w archiwum v2.")
+
+# ==========================================
+# ZAKŁADKA 5: USTAWIENIA HARMONOGRAMU
+# ==========================================
+with tab_settings:
+    st.header("⚙️ Konfiguracja i Ustawienia Harmonogramu")
+    st.markdown("Tutaj możesz zarządzać słownikami systemowymi oraz listą pracowników wpływających na generowany harmonogram.")
+
+    set_tab1, set_tab2, set_tab3 = st.tabs([
         "🚫 Powody nieobecności", 
-        "🕒 Grupy i godziny pracy", 
-        "👥 Pracownicy"
+        "🕒 Grupy i Czas Pracy", 
+        "👥 Lista Pracowników"
     ])
 
-    # Sub-tab 1: Powody nieobecności
-    with sub_tab1:
-        st.subheader("Lista powodów nieobecności")
-        st.caption("Dodawaj nowe pozycje na dole tabeli lub usuwaj zaznaczone wiersze klawiszem Delete.")
+    # 1. Powody nieobecności
+    with set_tab1:
+        st.subheader("Modyfikacja powodów nieobecności")
+        st.caption("Dodawaj nowe pozycje bezpośrednio w tabeli, edytuj istniejące lub usuwaj zaznaczone wiersze.")
         
-        st.session_state.nieobecnosci = st.data_editor(
-            st.session_state.nieobecnosci,
+        # Przekształcenie listy na DataFrame do edycji w st.data_editor
+        df_reasons_editable = pd.DataFrame({"Powód nieobecności": st.session_state.absence_reasons})
+        edited_reasons_df = st.data_editor(
+            df_reasons_editable,
             num_rows="dynamic",
             use_container_width=True,
-            key="edytor_nieobecnosci"
+            key="editor_absence_reasons"
         )
+        # Zapisz z powrotem do listy w session_state
+        if not edited_reasons_df.empty:
+            st.session_state.absence_reasons = edited_reasons_df["Powód nieobecności"].dropna().astype(str).tolist()
 
-    # Sub-tab 2: Lista Grup
-    with sub_tab2:
-        st.subheader("Zarządzanie grupami i czasem pracy")
-        st.caption("Zmiany nazw grup zostaną odzwierciedlone w liście wyboru dla pracowników.")
+    # 2. Lista grup i czas pracy
+    with set_tab2:
+        st.subheader("Modyfikacja grup oraz godzin pracy")
+        st.caption("Możesz zmieniać nazwy grup, godziny pracy lub dodawać nowe wiersze.")
         
-        st.session_state.grupy = st.data_editor(
-            st.session_state.grupy,
+        edited_groups_df = st.data_editor(
+            st.session_state.groups_df,
             num_rows="dynamic",
             use_container_width=True,
-            key="edytor_grupy"
+            key="editor_groups"
         )
+        st.session_state.groups_df = edited_groups_df
 
-    # Sub-tab 3: Lista Pracowników
-    with sub_tab3:
-        st.subheader("Zarządzanie kadrami")
-        st.caption("Przypisuj grupy, harmonogramy i funkcje do poszczególnych osób.")
+    # 3. Lista pracowników
+    with set_tab3:
+        st.subheader("Modyfikacja pracowników, grup i stanowisk")
+        st.caption("Zarządzaj zespołem, przypisuj grupy, przedziały dni pracujących (system), stanowiska i funkcje.")
         
-        # Lista dostępnych grup do rozwijanego menu w tabeli
-        opcje_grup = st.session_state.grupy["Nazwa grupy"].dropna().unique().tolist()
+        # Pobierz aktualne nazwy grup jako opcje wyboru dla kolumny Grupa
+        available_group_names = st.session_state.groups_df["Nazwa grupy"].dropna().astype(str).tolist()
         
-        st.session_state.pracownicy = st.data_editor(
-            st.session_state.pracownicy,
+        edited_employees_df = st.data_editor(
+            st.session_state.employees_df,
             num_rows="dynamic",
             use_container_width=True,
             column_config={
-                "Grupa": st.column_config.SelectboxColumn(
-                    "Grupa",
-                    help="Wybierz grupę z listy definiowalnej w zakładce obok",
-                    options=opcje_grup,
-                    required=True
+                "GRUPA": st.column_config.SelectboxColumn(
+                    "GRUPA",
+                    options=available_group_names,
+                    required=True,
+                    help="Wybierz przypisaną grupę"
+                ),
+                "SYSTEM": st.column_config.SelectboxColumn(
+                    "SYSTEM",
+                    options=["PONIEDZIAŁEK-PIĄTEK", "WTOREK-SOBOTA"],
+                    required=True,
+                    help="Wybierz przedział dni pracujących"
                 )
             },
-            key="edytor_pracownicy"
+            key="editor_employees"
         )
+        st.session_state.employees_df = edited_employees_df
