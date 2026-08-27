@@ -290,7 +290,7 @@ with tab_gen:
                         g_num = int(str(maciej_emp["GRUPA"]).replace("GRUPA", "").strip())
                     except:
                         g_num = 1
-                    shift_rotation = ((week_num - 1 + (g_num - 1)) % 4) + 1
+                    shift_rotation = ((week_num - 1 + (g_num - 1)) % 3) + 1
                     if shift_rotation == 1:
                         maciej_early_days.add(date_obj.strftime("%d.%m.%Y"))
 
@@ -326,32 +326,33 @@ with tab_gen:
                     except:
                         g_num = 1
                     
-                    # Logika zmian z uwzględnieniem braku rotacji dla grup 4 i 7
-                    if g_num == 4:
-                        czas_zmiany = "08:00-16:00"
-                        shift_val = 4
-                    elif g_num == 7:
-                        czas_zmiany = "08:00-17:00"
-                        shift_val = 7
-                    elif g_num == 8:
+                    # Pobierz domyślny czas z tabeli grup dla grup niarotujących
+                    matched_group_row = st.session_state.groups_df[st.session_state.groups_df["Nazwa grupy"].astype(str).str.strip().str.upper() == g_str.strip().upper()]
+                    default_group_time = str(matched_group_row.iloc[0]["Czas pracy"]) if not matched_group_row.empty else "08:00-16:00"
+
+                    # Logika rotacji: tylko grupy 1, 2 i 3 rotują między sobą
+                    if g_num in [1, 2, 3]:
+                        shift_rotation = ((week_num - 1 + (g_num - 1)) % 3) + 1
+                        shift_val = shift_rotation
+                        if shift_rotation == 1:
+                            czas_zmiany = "06:00-14:00"
+                        elif shift_rotation == 2:
+                            czas_zmiany = "08:00-16:00"
+                        else:
+                            czas_zmiany = "11:00-19:00"
+                    else:
+                        # Pozostałe grupy NIE rotują – pobierają stałe godziny z tabeli grup
+                        czas_zmiany = default_group_time
+                        shift_val = g_num
+
+                    # Obsługa specjalna (jeśli dotyczy)
+                    if g_num == 8:
                         if date_str in maciej_early_days:
                             czas_zmiany = "06:00-14:00"
                             shift_val = 1
                         else:
                             czas_zmiany = "07:30-15:30"
                             shift_val = 8
-                    else:
-                        # Pozostałe grupy rotują normalnie
-                        shift_rotation = ((week_num - 1 + (g_num - 1)) % 4) + 1
-                        shift_val = shift_rotation
-                        if shift_rotation == 1:
-                            czas_zmiany = "06:00-14:00"
-                        elif shift_rotation == 2:
-                            czas_zmiany = "08:00-16:00"
-                        elif shift_rotation == 3:
-                            czas_zmiany = "11:00-19:00"
-                        else:
-                            czas_zmiany = "08:00-17:00"
 
                     # Globalne reguły dla dni tygodnia (Poniedziałek i Sobota)
                     if day_name == "poniedziałek":
@@ -374,7 +375,7 @@ with tab_gen:
                 })
                 
         st.session_state.current_schedule_df = pd.DataFrame(schedule_rows)
-        st.success(f"Wygenerowano harmonogram v2 na {period_key} z pełną listą pracowników i regułami godzin!")
+        st.success(f"Wygenerowano harmonogram v2 na {period_key} – rotują wyłącznie grupy 1, 2 i 3!")
 
     schedule_editor_fragment()
 
