@@ -1,18 +1,28 @@
-import streamlit as st
+import io
+import datetime
 import pandas as pd
-
-st.set_page_config(page_title="Ustawienia Harmonogramu", layout="wide")
+import plotly.express as px
+import streamlit as st
 
 # -----------------------------------------------------------------------------
-# 1. INICJALIZACJA DANYCH W SESSION STATE (ładuje dane domyślne przy starcie)
+# 1. KONFIGURACJA STRONY
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="System Harmonogramu Pracy",
+    page_icon="📅",
+    layout="wide"
+)
+
+# -----------------------------------------------------------------------------
+# 2. INICJALIZACJA BAZY DANYCH (SESSION STATE)
 # -----------------------------------------------------------------------------
 if "nieobecnosci" not in st.session_state:
     st.session_state.nieobecnosci = pd.DataFrame({
         "Powód nieobecności": [
-            "Urlop wypoczynkowy", 
-            "L4 / Zwolnienie lekarskie", 
-            "Urlop na żądanie", 
-            "Opieka", 
+            "Urlop wypoczynkowy",
+            "L4 / Zwolnienie lekarskie",
+            "Urlop na żądanie",
+            "Opieka nad dzieckiem",
             "Nieobecność usprawiedliwiona"
         ]
     })
@@ -40,59 +50,136 @@ if "pracownicy" not in st.session_state:
     ])
 
 # -----------------------------------------------------------------------------
-# 2. WIDOK ZAKŁADEK USTAWIEŃ
+# 3. NAWIGACJA GŁÓWNA
 # -----------------------------------------------------------------------------
-st.title("⚙️ Karta Ustawień Harmonogramu")
+st.title("📅 System Zarządzania Harmonogramem")
 
-tab_nieobecnosci, tab_grupy, tab_pracownicy = st.tabs([
-    "🚫 Powody nieobecności", 
-    "🕒 Grupy i godziny pracy", 
-    "👥 Pracownicy"
+main_tab1, main_tab2, main_tab3 = st.tabs([
+    "📋 Harmonogram Główny", 
+    "📊 Statystyki i Raporty", 
+    "⚙️ Ustawienia"
 ])
 
-# KARTA 1: Powody nieobecności
-with tab_nieobecnosci:
-    st.subheader("Lista powodów nieobecności")
-    st.caption("Możesz edytować istniejące pozycje, dodawać nowe na dole tabeli lub usuwać wybrane wiersze.")
+# -----------------------------------------------------------------------------
+# TAB 1: HARMONOGRAM GŁÓWNY
+# -----------------------------------------------------------------------------
+with main_tab1:
+    st.header("Podgląd Harmonogramu")
     
-    st.session_state.nieobecnosci = st.data_editor(
-        st.session_state.nieobecnosci,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="editor_nieobecnosci"
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        wybrany_miesiac = st.date_input("Wybierz miesiąc/rok", value=datetime.date.today())
+        st.info(f"Wybrany okres: **{wybrany_miesiac.strftime('%B %Y')}**")
+    
+    # Łączenie danych pracowników z informacją o godzinach grupy
+    df_merged = st.session_state.pracownicy.merge(
+        st.session_state.grupy, 
+        left_on="Grupa", 
+        right_on="Nazwa grupy", 
+        how="left"
+    ).drop(columns=["Nazwa grupy"], errors="ignore")
+    
+    st.subheader("Bieżąca obsada zespołu")
+    st.dataframe(df_merged, use_container_width=True)
+
+    # Funkcja generująca plik Excel do pobrania
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df_merged.to_excel(writer, index=False, sheet_name="Harmonogram")
+    
+    st.download_button(
+        label="📥 Pobierz Harmonogram (Excel)",
+        data=output.getvalue(),
+        file_name=f"harmonogram_{wybrany_miesiac.strftime('%Y_%m')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-# KARTA 2: Lista Grup
-with tab_grupy:
-    st.subheader("Lista grup i czasy pracy")
-    st.caption("Modyfikuj godziny, zmieniaj nazwy grup lub dodawaj nowe wiersze.")
+# -----------------------------------------------------------------------------
+# TAB 2: STATYSTYKI I RAPORTY
+# -----------------------------------------------------------------------------
+with main_tab2:
+    st.header("Podsumowanie zespołu")
     
-    st.session_state.grupy = st.data_editor(
-        st.session_state.grupy,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="editor_grupy"
-    )
-
-# KARTA 3: Lista Pracowników
-with tab_pracownicy:
-    st.subheader("Lista pracowników i przypisania")
-    st.caption("Kolumna 'Grupa' automatycznie podpowiada grupy zaktualizowane w poprzedniej zakładce.")
-    
-    # Dynamiczne pobranie dostępnych grup do listy rozwijanej w tabeli
-    aktualne_grupy = st.session_state.grupy["Nazwa grupy"].dropna().unique().tolist()
-    
-    st.session_state.pracownicy = st.data_editor(
-        st.session_state.pracownicy,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "Grupa": st.column_config.SelectboxColumn(
-                "Grupa",
-                help="Wybierz grupę z listy",
-                options=aktualne_grupy,
-                required=True
+    if not st.session_state.pracownicy.empty:
+        col_chart1, col_chart2 = st.columns(2)
+        
+        with col_chart1:
+            st.subheader("Podział wg Stanowisk")
+            fig_stanowiska = px.pie(
+                st.session_state.pracownicy, 
+                names="Stanowisko", 
+                title="Struktura stanowisk"
             )
-        },
-        key="editor_pracownicy"
-    )
+            st.plotly_chart(fig_stanowiska, use_container_width=True)
+            
+        with col_chart2:
+            st.subheader("Liczebność Grup")
+            fig_grupy = px.bar(
+                st.session_state.pracownicy["Grupa"].value_counts().reset_index(),
+                x="Grupa", 
+                y="count",
+                labels={"count": "Liczba pracowników", "Grupa": "Grupa"},
+                title="Liczba osób w grupach"
+            )
+            st.plotly_chart(fig_grupy, use_container_width=True)
+    else:
+        st.warning("Brak danych o pracownikach do wyświetlenia statystyk.")
+
+# -----------------------------------------------------------------------------
+# TAB 3: KARTA USTAWIEŃ
+# -----------------------------------------------------------------------------
+with main_tab3:
+    st.header("⚙️ Konfiguracja Modułów")
+    
+    sub_tab1, sub_tab2, sub_tab3 = st.tabs([
+        "🚫 Powody nieobecności", 
+        "🕒 Grupy i godziny pracy", 
+        "👥 Pracownicy"
+    ])
+
+    # Sub-tab 1: Powody nieobecności
+    with sub_tab1:
+        st.subheader("Lista powodów nieobecności")
+        st.caption("Dodawaj nowe pozycje na dole tabeli lub usuwaj zaznaczone wiersze klawiszem Delete.")
+        
+        st.session_state.nieobecnosci = st.data_editor(
+            st.session_state.nieobecnosci,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="edytor_nieobecnosci"
+        )
+
+    # Sub-tab 2: Lista Grup
+    with sub_tab2:
+        st.subheader("Zarządzanie grupami i czasem pracy")
+        st.caption("Zmiany nazw grup zostaną odzwierciedlone w liście wyboru dla pracowników.")
+        
+        st.session_state.grupy = st.data_editor(
+            st.session_state.grupy,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="edytor_grupy"
+        )
+
+    # Sub-tab 3: Lista Pracowników
+    with sub_tab3:
+        st.subheader("Zarządzanie kadrami")
+        st.caption("Przypisuj grupy, harmonogramy i funkcje do poszczególnych osób.")
+        
+        # Lista dostępnych grup do rozwijanego menu w tabeli
+        opcje_grup = st.session_state.grupy["Nazwa grupy"].dropna().unique().tolist()
+        
+        st.session_state.pracownicy = st.data_editor(
+            st.session_state.pracownicy,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "Grupa": st.column_config.SelectboxColumn(
+                    "Grupa",
+                    help="Wybierz grupę z listy definiowalnej w zakładce obok",
+                    options=opcje_grup,
+                    required=True
+                )
+            },
+            key="edytor_pracownicy"
+        )
