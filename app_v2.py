@@ -238,19 +238,19 @@ st.sidebar.markdown("---")
 st.sidebar.header("📁 Wgrywanie Danych z Produkcji")
 uploaded_month_file = st.sidebar.file_uploader("Główny plik z produkcją (Sztuki, Pozycje przyjęte, Waga):", type=["xlsx", "xls"])
 
-# Panel boczny - Edycja Średnich 12M i Wag Parametrów
+# Panel boczny - Edycja Średnich 12M i Wag Parametrów (Zaktualizowane domyślne)
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Parametry i Wagi Premiowe")
 
 with st.sidebar.expander("📊 Edycja Wag i Średnich 12M", expanded=True):
-    avg_lines_12m = st.number_input("Średnia 12M (Pozycje przyjęte):", value=23883.83, step=100.0, format="%.2f")
-    w_lines = st.number_input("Waga % (Pozycje przyjęte):", value=37.50, step=0.01, format="%.2f")
+    avg_lines_12m = st.number_input("Średnia 12M (Pozycje przyjęte):", value=17322.50, step=100.0, format="%.2f")
+    w_lines = st.number_input("Waga % (Pozycje przyjęte):", value=42.86, step=0.01, format="%.2f")
 
-    avg_pcs_12m = st.number_input("Średnia 12M (Sztuki):", value=82217.25, step=100.0, format="%.2f")
-    w_pcs = st.number_input("Waga % (Sztuki):", value=31.25, step=0.01, format="%.2f")
+    avg_pcs_12m = st.number_input("Średnia 12M (Sztuki):", value=58710.75, step=100.0, format="%.2f")
+    w_pcs = st.number_input("Waga % (Sztuki):", value=28.57, step=0.01, format="%.2f")
 
-    avg_weight_12m = st.number_input("Średnia 12M (Waga łączna):", value=35726.91, step=100.0, format="%.2f")
-    w_weight = st.number_input("Waga % (Waga łączna):", value=31.25, step=0.01, format="%.2f")
+    avg_weight_12m = st.number_input("Średnia 12M (Waga łączna):", value=26417.42, step=100.0, format="%.2f")
+    w_weight = st.number_input("Waga % (Waga łączna):", value=28.57, step=0.01, format="%.2f")
 
     total_w = w_pcs + w_lines + w_weight
     st.caption(f"Suma wag: **{total_w:.2f}%**")
@@ -384,7 +384,8 @@ with tab_calc:
     if st.session_state.current_schedule_df.empty:
         st.warning("Najpierw wygeneruj harmonogram w pierwszej zakładce!")
     else:
-        base_salary, step_bonus_pct = 4300.0, 0.04
+        base_salary = 4300.0
+        step_bonus_pct = 0.05  # Zmieniono z 0.04 na 0.05 (5% za każde 10%)
 
         w_pcs_frac = w_pcs / 100.0
         w_lines_frac = w_lines / 100.0
