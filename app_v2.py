@@ -238,7 +238,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("📁 Wgrywanie Danych z Produkcji")
 uploaded_month_file = st.sidebar.file_uploader("Główny plik z produkcją (Sztuki, Pozycje przyjęte, Waga):", type=["xlsx", "xls"])
 
-# Panel boczny - Edycja Średnich 12M i Wag Parametrów (Zaktualizowane domyślne)
+# Panel boczny - Edycja Średnich 12M i Wag Parametrów
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Parametry i Wagi Premiowe")
 
@@ -379,13 +379,13 @@ with tab_gen:
 # ZAKŁADKA 2: KALKULATOR PREMII
 # ==========================================
 with tab_calc:
-    st.header("🧮 Kalkulator Premii v2 (Bez potrąceń i pakowania)")
+    st.header("🧮 Kalkulator Premii v2 (Ciągłe wyliczanie proporcjonalne)")
     
     if st.session_state.current_schedule_df.empty:
         st.warning("Najpierw wygeneruj harmonogram w pierwszej zakładce!")
     else:
         base_salary = 4300.0
-        step_bonus_pct = 0.05  # Zmieniono z 0.04 na 0.05 (5% za każde 10%)
+        step_bonus_pct = 0.05  # 5% premii bazowej za każde 10%
 
         w_pcs_frac = w_pcs / 100.0
         w_lines_frac = w_lines / 100.0
@@ -410,8 +410,10 @@ with tab_calc:
         dev_weight = (cur_weight - avg_weight_12m) / avg_weight_12m if avg_weight_12m > 0 else 0.0
         
         indicator = (dev_pcs * w_pcs_frac + dev_lines * w_lines_frac + dev_weight * w_weight_frac)
-        full_steps = max(0, int(indicator // 0.10)) if indicator > 0 else 0
-        bonus_rate = full_steps * step_bonus_pct
+        
+        # Zmiana: ciągłe wyliczanie proporcjonalne dokładnie do 2 miejsc po przecinku
+        # Skoro 10% wskaźnika daje 5% premii, przelicznik wynosi (0.05 / 0.10) = 0.5
+        bonus_rate = indicator * (step_bonus_pct / 0.10) if indicator > 0 else 0.0
         max_bonus_per_emp = base_salary * bonus_rate
 
         summary_list = []
@@ -434,7 +436,7 @@ with tab_calc:
 
         col_m1, col_m2, col_m3 = st.columns(3)
         col_m1.metric("Wskaźnik Wykonania Działu", f"{indicator*100:.2f}%")
-        col_m2.metric("Stawka Premii", f"{bonus_rate*100:.1f}%")
+        col_m2.metric("Stawka Premii (proporcjonalna)", f"{bonus_rate*100:.2f}%")
         col_m3.metric("Premia na pracownika", f"{max_bonus_per_emp:.2f} PLN")
 
         st.subheader("Rozliczenie Premiowe Pracowników (v2)")
