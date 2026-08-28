@@ -20,19 +20,39 @@ st.set_page_config(
 
 st.markdown("""
     <style>
+    /* Główny motyw – czyste tło i nowoczesna czcionka */
     .stApp { 
         background-color: #f8f9fa; 
         font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
+    
+    /* Nagłówki */
     h1, h2, h3 { 
         color: #111827; 
         font-weight: 700;
         letter-spacing: -0.025em;
     }
+    
+    /* Panel boczny (Sidebar) */
     [data-testid="stSidebar"] {
         background-color: #ffffff;
         border-right: 2px solid #ffb703;
     }
+    
+    /* Pasek górny / akcenty nawigacyjne (Styl paska z projektu) */
+    .industrial-header {
+        background-color: #111827;
+        color: #ffffff;
+        padding: 1rem 1.5rem;
+        border-radius: 8px;
+        border-bottom: 4px solid #ffb703;
+        margin-bottom: 1.5rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    /* Przyciski standardowe */
     div.stButton > button { 
         border-radius: 6px; 
         border: 1px solid #d1d5db; 
@@ -46,6 +66,8 @@ st.markdown("""
         color: #b45309;
         background-color: #fffbeb;
     }
+    
+    /* Główny przycisk (Primary - Industrial Yellow) */
     button[kind="primary"] {
         background-color: #ffb703 !important;
         color: #111827 !important;
@@ -55,12 +77,16 @@ st.markdown("""
     button[kind="primary"]:hover {
         background-color: #f59e0b !important;
     }
+
+    /* Tabele i dataframe */
     div.stDataFrame { 
         border-radius: 8px; 
         border: 1px solid #e5e7eb;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
         background-color: white;
     }
+    
+    /* Zakładki (Tabs w stylu żółtego paska menu) */
     .stTabs [data-baseweb="tab-list"] {
         gap: 6px;
         background-color: #111827;
@@ -173,6 +199,7 @@ DEFAULT_ABSENCE_REASONS = [
     "ODEBRANE ZA ŚWIĘTO"
 ]
 
+# Stan sesji
 if 'history' not in st.session_state: 
     st.session_state.history = load_archive()
 if 'current_schedule_df' not in st.session_state: 
@@ -180,6 +207,9 @@ if 'current_schedule_df' not in st.session_state:
 if 'absence_reasons' not in st.session_state: 
     st.session_state.absence_reasons = DEFAULT_ABSENCE_REASONS.copy()
 
+# ==========================================
+# FRAGMENT EDYTORSKI
+# ==========================================
 @st.fragment
 def schedule_editor_fragment():
     if not st.session_state.current_schedule_df.empty:
@@ -436,7 +466,7 @@ with tab_calc:
     if st.session_state.current_schedule_df.empty:
         st.info("Najpierw wygeneruj harmonogram w zakładce 'Generator Harmonogramu'.")
     else:
-        base_salary, step_bonus_pct = 4300.0, 0.05  # POPRAWIONE: 5% (0.05) za każde 10% powyżej progu
+        base_salary, step_bonus_pct = 4300.0, 0.04
 
         w_pcs_frac = w_pcs / 100.0
         w_lines_frac = w_lines / 100.0
