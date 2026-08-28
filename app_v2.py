@@ -385,7 +385,7 @@ with tab_calc:
         st.warning("Najpierw wygeneruj harmonogram w pierwszej zakładce!")
     else:
         base_salary = 4300.0
-        step_bonus_pct = 0.05  # 5% premii bazowej za każde 10%
+        step_bonus_pct = 0.04  # Zmieniono z 0.05 na 0.04 (4% premii bazowej za każde 10%)
 
         w_pcs_frac = w_pcs / 100.0
         w_lines_frac = w_lines / 100.0
@@ -411,8 +411,7 @@ with tab_calc:
         
         indicator = (dev_pcs * w_pcs_frac + dev_lines * w_lines_frac + dev_weight * w_weight_frac)
         
-        # Zmiana: ciągłe wyliczanie proporcjonalne dokładnie do 2 miejsc po przecinku
-        # Skoro 10% wskaźnika daje 5% premii, przelicznik wynosi (0.05 / 0.10) = 0.5
+        # Ciągłe wyliczanie proporcjonalne dokładnie do 2 miejsc po przecinku (4% za każde 10% -> mnożnik 0.04 / 0.10 = 0.4)
         bonus_rate = indicator * (step_bonus_pct / 0.10) if indicator > 0 else 0.0
         max_bonus_per_emp = base_salary * bonus_rate
 
