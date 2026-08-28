@@ -92,6 +92,12 @@ def get_col_sum_flexible(df, possible_names):
             return float(pd.to_numeric(df[col], errors='coerce').fillna(0).sum())
     return 0.0
 
+def highlight_free_days(row):
+    is_free = str(row.get("DZIEŃ PRACUJĄCY/WOLNY", "")).lower() in ["wolny", "święto"] or str(row.get("CZAS ZMIANY", "")).lower() == "wolne"
+    if is_free:
+        return ['background-color: #d4edda'] * len(row)
+    return [''] * len(row)
+
 DEFAULT_ABSENCE_REASONS = [
     "Brak",
     "CHOROBOWE",
@@ -153,16 +159,20 @@ def schedule_editor_fragment():
                 def fill_start(row):
                     if row["NIEOBECNOŚĆ"] != "Brak":
                         return "NIEOBECNY"
+                    if row["DZIEŃ PRACUJĄCY/WOLNY"] in ["Wolny", "Święto"] or str(row["CZAS ZMIANY"]).strip().lower() == "wolne":
+                        return "Wolne"
                     val_str = str(row["CZAS ZMIANY"]).strip()
-                    if "-" in val_str and val_str != "Wolne":
+                    if "-" in val_str and val_str.lower() != "wolne":
                         return val_str.split("-")[0].strip()
                     return ""
 
                 def fill_end(row):
                     if row["NIEOBECNOŚĆ"] != "Brak":
                         return "NIEOBECNY"
+                    if row["DZIEŃ PRACUJĄCY/WOLNY"] in ["Wolny", "Święto"] or str(row["CZAS ZMIANY"]).strip().lower() == "wolne":
+                        return "Wolne"
                     val_str = str(row["CZAS ZMIANY"]).strip()
-                    if "-" in val_str and val_str != "Wolne":
+                    if "-" in val_str and val_str.lower() != "wolne":
                         return val_str.split("-")[1].strip()
                     return ""
 
@@ -189,18 +199,26 @@ def schedule_editor_fragment():
         edited_df.loc[mask_absent, "GODZINA ROZPOCZĘCIA"] = "NIEOBECNY"
         edited_df.loc[mask_absent, "GODZINA ZAKOŃCZENIA"] = "NIEOBECNY"
 
+        mask_free = edited_df["DZIEŃ PRACUJĄCY/WOLNY"].isin(["Wolny", "Święto"]) | (edited_df["CZAS ZMIANY"].astype(str).str.lower() == "wolne")
+        edited_df.loc[mask_free, "GODZINA ROZPOCZĘCIA"] = "Wolne"
+        edited_df.loc[mask_free, "GODZINA ZAKOŃCZENIA"] = "Wolne"
+
         def restore_start(row):
             if row["NIEOBECNOŚĆ"] == "Brak" and row["GODZINA ROZPOCZĘCIA"] == "NIEOBECNY":
+                if row["DZIEŃ PRACUJĄCY/WOLNY"] in ["Wolny", "Święto"] or str(row["CZAS ZMIANY"]).strip().lower() == "wolne":
+                    return "Wolne"
                 val_str = str(row["CZAS ZMIANY"]).strip()
-                if "-" in val_str and val_str != "Wolne":
+                if "-" in val_str and val_str.lower() != "wolne":
                     return val_str.split("-")[0].strip()
                 return ""
             return row["GODZINA ROZPOCZĘCIA"]
 
         def restore_end(row):
             if row["NIEOBECNOŚĆ"] == "Brak" and row["GODZINA ZAKOŃCZENIA"] == "NIEOBECNY":
+                if row["DZIEŃ PRACUJĄCY/WOLNY"] in ["Wolny", "Święto"] or str(row["CZAS ZMIANY"]).strip().lower() == "wolne":
+                    return "Wolne"
                 val_str = str(row["CZAS ZMIANY"]).strip()
-                if "-" in val_str and val_str != "Wolne":
+                if "-" in val_str and val_str.lower() != "wolne":
                     return val_str.split("-")[1].strip()
                 return ""
             return row["GODZINA ZAKOŃCZENIA"]
@@ -209,6 +227,10 @@ def schedule_editor_fragment():
         edited_df["GODZINA ZAKOŃCZENIA"] = edited_df.apply(restore_end, axis=1)
 
         st.session_state.current_schedule_df = edited_df
+
+        st.markdown("---")
+        st.subheader("👁️ Podgląd harmonogramu z zaznaczonymi dniami wolnymi")
+        st.dataframe(st.session_state.current_schedule_df.style.apply(highlight_free_days, axis=1), use_container_width=True)
 
 # ==========================================
 # ZAKŁADKI GŁÓWNE
@@ -320,7 +342,9 @@ with tab_gen:
                 if not is_working_day:
                     czas_zmiany = "Wolne"
                     shift_val = "Wolne"
+                    default_start_end = "Wolne"
                 else:
+                    default_start_end = ""
                     g_str = str(emp["GRUPA"])
                     try:
                         g_num = int(g_str.replace("GRUPA", "").strip())
@@ -364,8 +388,8 @@ with tab_gen:
                     "ZMIANA": shift_val if not is_holiday else "Święto",
                     "CZAS ZMIANY": czas_zmiany,
                     "DZIEŃ PRACUJĄCY/WOLNY": status_dzien,
-                    "GODZINA ROZPOCZĘCIA": "",
-                    "GODZINA ZAKOŃCZENIA": "",
+                    "GODZINA ROZPOCZĘCIA": default_start_end,
+                    "GODZINA ZAKOŃCZENIA": default_start_end,
                     "NIEOBECNOŚĆ": "Brak",
                     "NADGODZINY (godz.)": 0.0
                 })
@@ -379,13 +403,13 @@ with tab_gen:
 # ZAKŁADKA 2: KALKULATOR PREMII
 # ==========================================
 with tab_calc:
-    st.header("🧮 Kalkulator Premii v2 (Ciągłe wyliczanie proporcjonalne)")
+    st.header("🧮 Kalkulator Premii v2 (Ciągłe wyliczanie proporcjonalne - 4% za każde 10%)")
     
     if st.session_state.current_schedule_df.empty:
         st.warning("Najpierw wygeneruj harmonogram w pierwszej zakładce!")
     else:
         base_salary = 4300.0
-        step_bonus_pct = 0.04  # Zmieniono z 0.05 na 0.04 (4% premii bazowej za każde 10%)
+        step_bonus_pct = 0.04  # 4% premii bazowej za każde 10%
 
         w_pcs_frac = w_pcs / 100.0
         w_lines_frac = w_lines / 100.0
