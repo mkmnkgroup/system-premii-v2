@@ -690,7 +690,7 @@ with tab_calc:
 
         st.markdown("---")
         st.subheader("⭐ Premia specjalna")
-        st.caption("Dodaj premie specjalne dla pracowników. Możesz dodawać nowe wiersze, wpisywać nazwisko pracownika, kwotę netto, osobę przyznającą oraz powód przyznania.")
+        st.caption("Dodaj premie specjalne dla pracowników. Pracownicy są wybierani z listy osób z harmonogramu na dany miesiąc.")
 
         if st.session_state.special_bonuses_df.empty:
             st.session_state.special_bonuses_df = pd.DataFrame(
@@ -698,11 +698,20 @@ with tab_calc:
                 columns=["Pracownik", "Kwota netto premii", "Kto przyznał", "Powód przyznania premii"]
             )
 
+        # Pobranie listy unikalnych pracowników z aktualnego harmonogramu
+        schedule_employees = df_sched["OSOBA"].unique().tolist() if not df_sched.empty else []
+
         edited_special_df = st.data_editor(
             st.session_state.special_bonuses_df,
             num_rows="dynamic",
             use_container_width=True,
             column_config={
+                "Pracownik": st.column_config.SelectboxColumn(
+                    "Pracownik",
+                    options=schedule_employees,
+                    required=True,
+                    help="Wybierz pracownika z harmonogramu na dany miesiąc"
+                ),
                 "Kwota netto premii": st.column_config.NumberColumn(
                     "Kwota netto premii",
                     format="%.2f zł",
