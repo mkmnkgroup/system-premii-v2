@@ -142,6 +142,20 @@ if 'groups_df' not in st.session_state:
 if 'employees_df' not in st.session_state:
     st.session_state.employees_df = pd.DataFrame(DEFAULT_EMPLOYEES)
 
+# Inicjalizacja stanów konfiguracyjnych w session_state
+if 'avg_lines_12m' not in st.session_state: st.session_state.avg_lines_12m = 17322.50
+if 'w_lines' not in st.session_state: st.session_state.w_lines = 42.86
+if 'avg_pcs_12m' not in st.session_state: st.session_state.avg_pcs_12m = 58710.75
+if 'w_pcs' not in st.session_state: st.session_state.w_pcs = 28.57
+if 'avg_weight_12m' not in st.session_state: st.session_state.avg_weight_12m = 26417.42
+if 'w_weight' not in st.session_state: st.session_state.w_weight = 28.57
+
+if 'ot_kierownik' not in st.session_state: st.session_state.ot_kierownik = 35.0
+if 'ot_brygadzista' not in st.session_state: st.session_state.ot_brygadzista = 30.0
+if 'ot_magazynier' not in st.session_state: st.session_state.ot_magazynier = 25.0
+if 'rate_pallet' not in st.session_state: st.session_state.rate_pallet = 10.0
+if 'pallet_pool' not in st.session_state: st.session_state.pallet_pool = 600.0
+
 # ==========================================
 # FRAGMENT EDYTORYCZNY
 # ==========================================
@@ -188,7 +202,6 @@ def schedule_editor_fragment():
                 use_container_width=True
             )
 
-        # Funkcja obsługująca natychmiastową zmianę stanu w locie bez konieczności naciskania Enter
         def on_editor_change():
             if "schedule_editor" in st.session_state:
                 edited_data = st.session_state["schedule_editor"]
@@ -246,7 +259,7 @@ tab_gen, tab_calc, tab_dash, tab_history, tab_comp, tab_settings = st.tabs([
     "📊 Dashboard i Wykresy", 
     "📁 Archiwum Historyczne", 
     "📈 Porównanie Wyników",
-    "⚙️ Ustawienia Harmonogramu"
+    "⚙️ Ustawienia"
 ])
 
 PL_DAYS = {0: "poniedziałek", 1: "wtorek", 2: "środa", 3: "czwartek", 4: "piątek", 5: "sobota", 6: "niedziela"}
@@ -264,23 +277,6 @@ period_key = f"{gen_month_name} {gen_year}"
 st.sidebar.markdown("---")
 st.sidebar.header("📁 Wgrywanie Danych z Produkcji")
 uploaded_month_file = st.sidebar.file_uploader("Główny plik z produkcją (Sztuki, Pozycje przyjęte, Waga):", type=["xlsx", "xls"])
-
-# Panel boczny - Edycja Średnich 12M i Wag Parametrów
-st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Parametry i Wagi Premiowe")
-
-with st.sidebar.expander("📊 Edycja Wag i Średnich 12M", expanded=True):
-    avg_lines_12m = st.number_input("Średnia 12M (Pozycje przyjęte):", value=17322.50, step=100.0, format="%.2f")
-    w_lines = st.number_input("Waga % (Pozycje przyjęte):", value=42.86, step=0.01, format="%.2f")
-
-    avg_pcs_12m = st.number_input("Średnia 12M (Sztuki):", value=58710.75, step=100.0, format="%.2f")
-    w_pcs = st.number_input("Waga % (Sztuki):", value=28.57, step=0.01, format="%.2f")
-
-    avg_weight_12m = st.number_input("Średnia 12M (Waga łączna):", value=26417.42, step=100.0, format="%.2f")
-    w_weight = st.number_input("Waga % (Waga łączna):", value=28.57, step=0.01, format="%.2f")
-
-    total_w = w_pcs + w_lines + w_weight
-    st.caption(f"Suma wag: **{total_w:.2f}%**")
 
 # ==========================================
 # ZAKŁADKA 1: HARMONOGRAM
@@ -416,9 +412,9 @@ with tab_calc:
         base_salary = 4300.0
         step_bonus_pct = 0.04  # 4% premii bazowej za każde 10%
 
-        w_pcs_frac = w_pcs / 100.0
-        w_lines_frac = w_lines / 100.0
-        w_weight_frac = w_weight / 100.0
+        w_pcs_frac = st.session_state.w_pcs / 100.0
+        w_lines_frac = st.session_state.w_lines / 100.0
+        w_weight_frac = st.session_state.w_weight / 100.0
 
         prod_df = pd.DataFrame()
         if uploaded_month_file is not None:
@@ -434,9 +430,9 @@ with tab_calc:
             cur_lines = get_col_sum_flexible(prod_df, ['pozycje', 'Pozycje'])
             cur_weight = get_col_sum_flexible(prod_df, ['Waga łączna', 'Waga laczna', 'Waga'])
 
-        dev_pcs = (cur_pcs - avg_pcs_12m) / avg_pcs_12m if avg_pcs_12m > 0 else 0.0
-        dev_lines = (cur_lines - avg_lines_12m) / avg_lines_12m if avg_lines_12m > 0 else 0.0
-        dev_weight = (cur_weight - avg_weight_12m) / avg_weight_12m if avg_weight_12m > 0 else 0.0
+        dev_pcs = (cur_pcs - st.session_state.avg_pcs_12m) / st.session_state.avg_pcs_12m if st.session_state.avg_pcs_12m > 0 else 0.0
+        dev_lines = (cur_lines - st.session_state.avg_lines_12m) / st.session_state.avg_lines_12m if st.session_state.avg_lines_12m > 0 else 0.0
+        dev_weight = (cur_weight - st.session_state.avg_weight_12m) / st.session_state.avg_weight_12m if st.session_state.avg_weight_12m > 0 else 0.0
         
         indicator = (dev_pcs * w_pcs_frac + dev_lines * w_lines_frac + dev_weight * w_weight_frac)
         
@@ -512,9 +508,9 @@ with tab_calc:
                     "actual_pcs": cur_pcs,
                     "actual_lines": cur_lines,
                     "actual_weight": cur_weight,
-                    "base_pcs": avg_pcs_12m,
-                    "base_lines": avg_lines_12m,
-                    "base_weight": avg_weight_12m
+                    "base_pcs": st.session_state.avg_pcs_12m,
+                    "base_lines": st.session_state.avg_lines_12m,
+                    "base_weight": st.session_state.avg_weight_12m
                 }
                 save_archive(st.session_state.history_v2)
                 st.success("Zapisano dane v2 do archiwum wraz z parametrami porównawczymi!")
@@ -606,71 +602,108 @@ with tab_comp:
         st.info("Brak zapisanych danych w archiwum v2. Wygeneruj i zapisz co najmniej jeden miesiąc.")
 
 # ==========================================
-# ZAKŁADKA 6: USTAWIENIA HARMONOGRAMU
+# ZAKŁADKA 6: USTAWIENIA (GŁÓWNA)
 # ==========================================
 with tab_settings:
-    st.header("⚙️ Konfiguracja i Ustawienia Harmonogramu")
-    st.markdown("Tutaj możesz zarządzać słownikami systemowymi oraz listą pracowników wpływających na generowany harmonogram.")
+    st.header("⚙️ Ustawienia i Konfiguracja Systemu")
 
-    set_tab1, set_tab2, set_tab3 = st.tabs([
-        "🚫 Powody nieobecności", 
-        "🕒 Grupy i Czas Pracy", 
-        "👥 Lista Pracowników"
+    set_sub_tab1, set_sub_tab2, set_sub_tab3 = st.tabs([
+        "📋 Konfiguracja i Ustawienia Harmonogramu", 
+        "💰 Konfiguracja premii głównej", 
+        "➕ Konfiguracje innych dodatków Premii"
     ])
 
-    # 1. Powody nieobecności
-    with set_tab1:
-        st.subheader("Modyfikacja powodów nieobecności")
-        st.caption("Dodawaj nowe pozycje bezpośrednio w tabeli, edytuj istniejące lub usuwaj zaznaczone wiersze.")
-        
-        df_reasons_editable = pd.DataFrame({"Powód nieobecności": st.session_state.absence_reasons})
-        edited_reasons_df = st.data_editor(
-            df_reasons_editable,
-            num_rows="dynamic",
-            use_container_width=True,
-            key="editor_absence_reasons"
-        )
-        if not edited_reasons_df.empty:
-            st.session_state.absence_reasons = edited_reasons_df["Powód nieobecności"].dropna().astype(str).tolist()
+    # 1. Konfiguracja i Ustawienia Harmonogramu
+    with set_sub_tab1:
+        set_tab1, set_tab2, set_tab3 = st.tabs([
+            "🚫 Powody nieobecności", 
+            "🕒 Grupy i Czas Pracy", 
+            "👥 Lista Pracowników"
+        ])
 
-    # 2. Lista grup i czas pracy
-    with set_tab2:
-        st.subheader("Modyfikacja grup oraz godzin pracy")
-        st.caption("Możesz zmieniać nazwy grup, godziny pracy lub dodawać nowe wiersze.")
-        
-        edited_groups_df = st.data_editor(
-            st.session_state.groups_df,
-            num_rows="dynamic",
-            use_container_width=True,
-            key="editor_groups"
-        )
-        st.session_state.groups_df = edited_groups_df
+        with set_tab1:
+            st.subheader("Modyfikacja powodów nieobecności")
+            st.caption("Dodawaj nowe pozycje bezpośrednio w tabeli, edytuj istniejące lub usuwaj zaznaczone wiersze.")
+            
+            df_reasons_editable = pd.DataFrame({"Powód nieobecności": st.session_state.absence_reasons})
+            edited_reasons_df = st.data_editor(
+                df_reasons_editable,
+                num_rows="dynamic",
+                use_container_width=True,
+                key="editor_absence_reasons"
+            )
+            if not edited_reasons_df.empty:
+                st.session_state.absence_reasons = edited_reasons_df["Powód nieobecności"].dropna().astype(str).tolist()
 
-    # 3. Lista pracowników
-    with set_tab3:
-        st.subheader("Modyfikacja pracowników, grup i stanowisk")
-        st.caption("Zarządzaj zespołem, przypisuj grupy, przedziały dni pracujących (system), stanowiska i funkcje.")
-        
-        available_group_names = st.session_state.groups_df["Nazwa grupy"].dropna().astype(str).tolist()
-        
-        edited_employees_df = st.data_editor(
-            st.session_state.employees_df,
-            num_rows="dynamic",
-            use_container_width=True,
-            column_config={
-                "GRUPA": st.column_config.SelectboxColumn(
-                    "GRUPA",
-                    options=available_group_names,
-                    required=True,
-                    help="Wybierz przypisaną grupę"
-                ),
-                "SYSTEM": st.column_config.SelectboxColumn(
-                    "SYSTEM",
-                    options=["PONIEDZIAŁEK-PIĄTEK", "WTOREK-SOBOTA"],
-                    required=True,
-                    help="Wybierz przedział dni pracujących"
-                )
-            },
-            key="editor_employees"
-        )
-        st.session_state.employees_df = edited_employees_df
+        with set_tab2:
+            st.subheader("Modyfikacja grup oraz godzin pracy")
+            st.caption("Możesz zmieniać nazwy grup, godziny pracy lub dodawać nowe wiersze.")
+            
+            edited_groups_df = st.data_editor(
+                st.session_state.groups_df,
+                num_rows="dynamic",
+                use_container_width=True,
+                key="editor_groups"
+            )
+            st.session_state.groups_df = edited_groups_df
+
+        with set_tab3:
+            st.subheader("Modyfikacja pracowników, grup i stanowisk")
+            st.caption("Zarządzaj zespołem, przypisuj grupy, przedziały dni pracujących (system), stanowiska i funkcje.")
+            
+            available_group_names = st.session_state.groups_df["Nazwa grupy"].dropna().astype(str).tolist()
+            
+            edited_employees_df = st.data_editor(
+                st.session_state.employees_df,
+                num_rows="dynamic",
+                use_container_width=True,
+                column_config={
+                    "GRUPA": st.column_config.SelectboxColumn(
+                        "GRUPA",
+                        options=available_group_names,
+                        required=True,
+                        help="Wybierz przypisaną grupę"
+                    ),
+                    "SYSTEM": st.column_config.SelectboxColumn(
+                        "SYSTEM",
+                        options=["PONIEDZIAŁEK-PIĄTEK", "WTOREK-SOBOTA"],
+                        required=True,
+                        help="Wybierz przedział dni pracujących"
+                    )
+                },
+                key="editor_employees"
+            )
+            st.session_state.employees_df = edited_employees_df
+
+    # 2. Konfiguracja premii głównej
+    with set_sub_tab2:
+        st.subheader("Konfiguracja premii głównej")
+        st.caption("Parametry oraz wagi do wyliczania premii głównej.")
+
+        st.session_state.avg_lines_12m = st.number_input("Średnia 12M (Pozycje przyjęte):", value=st.session_state.avg_lines_12m, step=100.0, format="%.2f", key="input_avg_lines")
+        st.session_state.w_lines = st.number_input("Waga % (Pozycje przyjęte):", value=st.session_state.w_lines, step=0.01, format="%.2f", key="input_w_lines")
+
+        st.session_state.avg_pcs_12m = st.number_input("Średnia 12M (Sztuki):", value=st.session_state.avg_pcs_12m, step=100.0, format="%.2f", key="input_avg_pcs")
+        st.session_state.w_pcs = st.number_input("Waga % (Sztuki):", value=st.session_state.w_pcs, step=0.01, format="%.2f", key="input_w_pcs")
+
+        st.session_state.avg_weight_12m = st.number_input("Średnia 12M (Waga łączna):", value=st.session_state.avg_weight_12m, step=100.0, format="%.2f", key="input_avg_weight")
+        st.session_state.w_weight = st.number_input("Waga % (Waga łączna):", value=st.session_state.w_weight, step=0.01, format="%.2f", key="input_w_weight")
+
+        total_w = st.session_state.w_pcs + st.session_state.w_lines + st.session_state.w_weight
+        st.caption(f"Suma wag: **{total_w:.2f}%**")
+
+    # 3. Konfiguracje innych dodatków Premii
+    with set_sub_tab3:
+        st.subheader("Konfiguracje innych dodatków Premii")
+        st.markdown("Określ stawki oraz pule budżetowe dla dodatkowych elementów wynagrodzenia.")
+
+        st.markdown("### Nadgodziny")
+        st.session_state.ot_kierownik = st.number_input("Stawka za nadgodziny kierownik (zł/h):", value=st.session_state.ot_kierownik, step=1.0, format="%.2f", key="input_ot_kierownik")
+        st.session_state.ot_brygadzista = st.number_input("Stawka za nadgodziny brygadzista (zł/h):", value=st.session_state.ot_brygadzista, step=1.0, format="%.2f", key="input_ot_brygadzista")
+        st.session_state.ot_magazynier = st.number_input("Stawka za nadgodziny magazynier (zł/h):", value=st.session_state.ot_magazynier, step=1.0, format="%.2f", key="input_ot_magazynier")
+
+        st.markdown("### Załadunki / Rozładunki")
+        st.session_state.rate_pallet = st.number_input("Stawka za paletę (zł netto):", value=st.session_state.rate_pallet, step=0.5, format="%.2f", key="input_rate_pallet")
+
+        st.markdown("### Obsługa paleciaka")
+        st.session_state.pallet_pool = st.number_input("Pula do podziału (zł netto):", value=st.session_state.pallet_pool, step=50.0, format="%.2f", key="input_pallet_pool")
