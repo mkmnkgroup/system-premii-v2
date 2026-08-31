@@ -211,6 +211,7 @@ if 'special_bonuses_df' not in st.session_state:
     )
 
 # Inicjalizacja stanów konfiguracyjnych w session_state
+if 'base_bonus_salary' not in st.session_state: st.session_state.base_bonus_salary = 4300.0
 if 'avg_lines_12m' not in st.session_state: st.session_state.avg_lines_12m = 17322.50
 if 'w_lines' not in st.session_state: st.session_state.w_lines = 42.86
 if 'avg_pcs_12m' not in st.session_state: st.session_state.avg_pcs_12m = 58710.75
@@ -477,7 +478,7 @@ with tab_calc:
     if st.session_state.current_schedule_df.empty:
         st.warning("Najpierw wygeneruj harmonogram w pierwszej zakładce!")
     else:
-        base_salary = 4300.0
+        base_salary = st.session_state.base_bonus_salary
         step_bonus_pct = 0.04 
 
         w_pcs_frac = st.session_state.w_pcs / 100.0
@@ -506,6 +507,9 @@ with tab_calc:
         indicator = (dev_pcs * w_pcs_frac + dev_lines * w_lines_frac + dev_weight * w_weight_frac)
         bonus_rate = indicator * (step_bonus_pct / 0.10) if indicator > 0 else 0.0
         max_bonus_per_emp = base_salary * bonus_rate
+
+        # --- INFORMACJA O PODSTAWIE PREMIOWEJ ---
+        st.info(f"💡 Aktualna podstawa do wyliczenia premii wynosi: **{base_salary:,.2f} zł netto** (możesz ją zmodyfikować w zakładce *Ustawienia*).".replace(",", " ").replace(".", ","))
 
         # --- SEKCJA GŁÓWNA: Wyniki miesiąca w odniesieniu do średniej rocznej ---
         st.markdown("---")
@@ -829,6 +833,15 @@ with tab_comp:
 # ==========================================
 with tab_settings:
     st.header("⚙️ Ustawienia Systemu v2")
+    
+    st.subheader("Baza i Podstawa Premiowa")
+    st.session_state.base_bonus_salary = st.number_input(
+        "Podstawa do wyliczania premii (zł netto):", 
+        value=st.session_state.base_bonus_salary, 
+        step=100.0, 
+        key="set_base_bonus_salary"
+    )
+
     st.subheader("Średnie 12-miesięczne (baza do wskaźnika)")
     st.session_state.avg_lines_12m = st.number_input("Średnia liczba pozycji 12m:", value=st.session_state.avg_lines_12m, key="set_avg_lines")
     st.session_state.w_lines = st.number_input("Waga pozycji (%):", value=st.session_state.w_lines, key="set_w_lines")
