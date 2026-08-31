@@ -51,29 +51,39 @@ def remove_pl_chars(text):
         text = str(text).replace(k, v)
     return text
 
-def generate_pdf_slips(calc_df, period, indicator, ot_df, pallet_df, pt_df, special_df):
+def generate_pdf_slips(calc_df, period, indicator, ot_df, pallet_df, pt_df, special_df, base_salary, bonus_rate, comparison_data=None):
     pdf = FPDF()
     for idx, row in calc_df.iterrows():
         emp_name = row['Pracownik']
         pdf.add_page()
-        pdf.set_font("Arial", 'B', 15)
+        pdf.set_font("Arial", 'B', 14)
         pdf.cell(200, 8, txt=remove_pl_chars(f"PASEK PREMIOWY v2 - {period}"), ln=True, align='C')
-        pdf.ln(4)
+        pdf.ln(2)
         
         pdf.set_font("Arial", '', 11)
-        pdf.cell(200, 7, txt=remove_pl_chars(f"Pracownik: {emp_name}"), ln=True)
-        pdf.cell(200, 7, txt=remove_pl_chars(f"Stanowisko: {row['Stanowisko']}"), ln=True)
+        pdf.cell(200, 6, txt=remove_pl_chars(f"Pracownik: {emp_name}"), ln=True)
+        pdf.cell(200, 6, txt=remove_pl_chars(f"Stanowisko: {row['Stanowisko']}"), ln=True)
         pdf.ln(2)
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-        pdf.ln(4)
+        pdf.ln(3)
         
-        # 1. Premia Główna
+        # 1. Premia Główna ze szczegółami wyliczenia
         pdf.set_font("Arial", 'B', 11)
-        pdf.cell(200, 6, txt=remove_pl_chars("1. Premia Główna:"), ln=True)
-        pdf.set_font("Arial", '', 10)
-        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Wskaźnik działu: {indicator*100:.2f}%"), ln=True)
+        pdf.cell(200, 6, txt=remove_pl_chars("1. Premia Główna (Szczegóły wyliczenia):"), ln=True)
+        pdf.set_font("Arial", '', 9)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Podstawa do wyliczenia premii: {base_salary:,.2f} zł netto".replace(",", " ").replace(".", ",")), ln=True)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Wskaźnik Wykonania Działu: {indicator*100:.2f}%"), ln=True)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Stawka Premii (proporcjonalna): {bonus_rate*100:.2f}%"), ln=True)
+        
+        if comparison_data:
+            pdf.cell(200, 5, txt=remove_pl_chars("   - Porównanie wyników miesiąca vs średnia roczna:"), ln=True)
+            for item in comparison_data:
+                line_str = f"     * {item['Parametr produkcyjny']}: Miesiąc: {item['Wartość w miesiącu']} | Baza: {item['Średnia roczna (baza)']} | Odchylenie: {item['Odchylenie procentowe (%)']} (Waga: {item['Waga wskaźnika']})"
+                pdf.cell(200, 5, txt=remove_pl_chars(line_str), ln=True)
+                
         pdf.cell(200, 5, txt=remove_pl_chars(f"   - Liczba nieobecności: {row['Liczba nieobecności']} | Potrącenia: BRAK (0%)"), ln=True)
         main_bonus = row['Premia netto (PLN)']
+        pdf.set_font("Arial", 'B', 10)
         pdf.cell(200, 5, txt=remove_pl_chars(f"   - Kwota premii głównej: {main_bonus:.2f} PLN"), ln=True)
         pdf.ln(2)
         
@@ -129,18 +139,18 @@ def generate_pdf_slips(calc_df, period, indicator, ot_df, pallet_df, pt_df, spec
                 pdf.cell(200, 5, txt=remove_pl_chars("   - Brak premii specjalnych"), ln=True)
         else:
             pdf.cell(200, 5, txt=remove_pl_chars("   - Brak premii specjalnych"), ln=True)
-        pdf.ln(4)
+        pdf.ln(3)
         
         total_net = main_bonus + ot_amount + pallet_amount + pt_amount + special_sum
         
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-        pdf.ln(4)
-        pdf.set_font("Arial", 'B', 13)
-        pdf.cell(200, 8, txt=remove_pl_chars(f"RAZEM DO WYPŁATY (NETTO): {total_net:.2f} PLN"), ln=True)
+        pdf.ln(3)
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(200, 7, txt=remove_pl_chars(f"RAZEM DO WYPŁATY (NETTO): {total_net:.2f} PLN"), ln=True)
         
-        pdf.ln(10)
-        pdf.set_font("Arial", 'I', 9)
-        pdf.cell(200, 6, txt=remove_pl_chars("Wygenerowano z Systemu Rozliczania Harmonogramów v2. Dokument wewnętrzny."), ln=True)
+        pdf.ln(6)
+        pdf.set_font("Arial", 'I', 8)
+        pdf.cell(200, 5, txt=remove_pl_chars("Wygenerowano z Systemu Rozliczania Harmonogramów v2. Dokument wewnętrzny."), ln=True)
         
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         pdf.output(tmp.name)
@@ -752,7 +762,10 @@ with tab_calc:
                     calc_df, period_key, indicator, 
                     overtime_pivot, st.session_state.pallet_employees_df, 
                     st.session_state.pallet_truck_employees_df, 
-                    st.session_state.special_bonuses_df
+                    st.session_state.special_bonuses_df,
+                    base_salary,
+                    bonus_rate,
+                    comparison_data
                 )
                 st.download_button(
                     label="⬇️ Pobierz plik PDF z paskami",
