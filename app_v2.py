@@ -51,32 +51,96 @@ def remove_pl_chars(text):
         text = str(text).replace(k, v)
     return text
 
-def generate_pdf_slips(calc_df, period, indicator):
+def generate_pdf_slips(calc_df, period, indicator, ot_df, pallet_df, pt_df, special_df):
     pdf = FPDF()
     for idx, row in calc_df.iterrows():
+        emp_name = row['Pracownik']
         pdf.add_page()
-        pdf.set_font("Arial", 'B', 16)
-        pdf.cell(200, 10, txt=remove_pl_chars(f"PASEK PREMIOWY v2 - {period}"), ln=True, align='C')
-        pdf.ln(10)
+        pdf.set_font("Arial", 'B', 15)
+        pdf.cell(200, 8, txt=remove_pl_chars(f"PASEK PREMIOWY v2 - {period}"), ln=True, align='C')
+        pdf.ln(4)
         
-        pdf.set_font("Arial", '', 12)
-        pdf.cell(200, 10, txt=remove_pl_chars(f"Pracownik: {row['Pracownik']}"), ln=True)
-        pdf.cell(200, 10, txt=remove_pl_chars(f"Stanowisko: {row['Stanowisko']}"), ln=True)
-        pdf.ln(5)
+        pdf.set_font("Arial", '', 11)
+        pdf.cell(200, 7, txt=remove_pl_chars(f"Pracownik: {emp_name}"), ln=True)
+        pdf.cell(200, 7, txt=remove_pl_chars(f"Stanowisko: {row['Stanowisko']}"), ln=True)
+        pdf.ln(2)
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(4)
+        
+        # 1. Premia Główna
+        pdf.set_font("Arial", 'B', 11)
+        pdf.cell(200, 6, txt=remove_pl_chars("1. Premia Główna:"), ln=True)
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Wskaźnik działu: {indicator*100:.2f}%"), ln=True)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Liczba nieobecności: {row['Liczba nieobecności']} | Potrącenia: BRAK (0%)"), ln=True)
+        main_bonus = row['Premia netto (PLN)']
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Kwota premii głównej: {main_bonus:.2f} PLN"), ln=True)
+        pdf.ln(2)
+        
+        # 2. Nadgodziny
+        ot_row = ot_df[ot_df['OSOBA'] == emp_name] if not ot_df.empty and 'OSOBA' in ot_df.columns else pd.DataFrame()
+        ot_hours = ot_row['Suma Nadgodzin (h)'].values[0] if not ot_row.empty and 'Suma Nadgodzin (h)' in ot_row.columns else 0.0
+        ot_amount = ot_row['Kwota za nadgodziny (PLN)'].values[0] if not ot_row.empty and 'Kwota za nadgodziny (PLN)' in ot_row.columns else 0.0
+        
+        pdf.set_font("Arial", 'B', 11)
+        pdf.cell(200, 6, txt=remove_pl_chars("2. Nadgodziny:"), ln=True)
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Liczba godzin: {ot_hours:.2f} h"), ln=True)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Kwota za nadgodziny: {ot_amount:.2f} PLN"), ln=True)
+        pdf.ln(2)
+        
+        # 3. Załadunki / Rozładunki
+        pallet_row = pallet_df[pallet_df['Pracownik'] == emp_name] if not pallet_df.empty and 'Pracownik' in pallet_df.columns else pd.DataFrame()
+        pallet_amount = pallet_row['Kwota za załadunki (PLN)'].values[0] if not pallet_row.empty and 'Kwota za załadunki (PLN)' in pallet_row.columns else 0.0
+        
+        pdf.set_font("Arial", 'B', 11)
+        pdf.cell(200, 6, txt=remove_pl_chars("3. Załadunki / Rozładunki:"), ln=True)
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Kwota: {pallet_amount:.2f} PLN"), ln=True)
+        pdf.ln(2)
+        
+        # 4. Obsługa paleciaka
+        pt_row = pt_df[pt_df['Pracownik'] == emp_name] if not pt_df.empty and 'Pracownik' in pt_df.columns else pd.DataFrame()
+        pt_hours = pt_row['Ilość godzin'].values[0] if not pt_row.empty and 'Ilość godzin' in pt_row.columns else 0.0
+        pt_amount = pt_row['Kwota (PLN)'].values[0] if not pt_row.empty and 'Kwota (PLN)' in pt_row.columns else 0.0
+        
+        pdf.set_font("Arial", 'B', 11)
+        pdf.cell(200, 6, txt=remove_pl_chars("4. Obsługa paleciaka:"), ln=True)
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Liczba godzin: {pt_hours:.2f} h"), ln=True)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Kwota: {pt_amount:.2f} PLN"), ln=True)
+        pdf.ln(2)
+        
+        # 5. Premia specjalna
+        pdf.set_font("Arial", 'B', 11)
+        pdf.cell(200, 6, txt=remove_pl_chars("5. Premia specjalna:"), ln=True)
+        pdf.set_font("Arial", '', 10)
+        special_sum = 0.0
+        if not special_df.empty:
+            emp_specials = special_df[special_df['Pracownik'].astype(str).str.strip().str.upper() == str(emp_name).strip().upper()]
+            if not emp_specials.empty:
+                for _, s_row in emp_specials.iterrows():
+                    s_amount = float(s_row.get('Kwota netto premii', 0.0) or 0.0)
+                    s_who = s_row.get('Kto przyznał', '-')
+                    s_reason = s_row.get('Powód przyznania premii', '-')
+                    special_sum += s_amount
+                    pdf.cell(200, 5, txt=remove_pl_chars(f"   - Kwota: {s_amount:.2f} PLN | Przyznał: {s_who} | Powód: {s_reason}"), ln=True)
+            else:
+                pdf.cell(200, 5, txt=remove_pl_chars("   - Brak premii specjalnych"), ln=True)
+        else:
+            pdf.cell(200, 5, txt=remove_pl_chars("   - Brak premii specjalnych"), ln=True)
+        pdf.ln(4)
+        
+        total_net = main_bonus + ot_amount + pallet_amount + pt_amount + special_sum
+        
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(4)
+        pdf.set_font("Arial", 'B', 13)
+        pdf.cell(200, 8, txt=remove_pl_chars(f"RAZEM DO WYPŁATY (NETTO): {total_net:.2f} PLN"), ln=True)
+        
         pdf.ln(10)
-        
-        pdf.cell(200, 10, txt=remove_pl_chars(f"Wskaznik dzialu: {indicator*100:.2f}%"), ln=True)
-        pdf.cell(200, 10, txt=remove_pl_chars(f"Liczba nieobecnosci: {row['Liczba nieobecności']}"), ln=True)
-        pdf.cell(200, 10, txt=remove_pl_chars("Potracenia za nieobecnosci: BRAK (0%)"), ln=True)
-        
-        pdf.ln(10)
-        pdf.set_font("Arial", 'B', 14)
-        pdf.cell(200, 10, txt=remove_pl_chars(f"DO WYPLATY (NETTO): {row['Premia netto (PLN)']:.2f} PLN"), ln=True)
-        
-        pdf.ln(20)
-        pdf.set_font("Arial", 'I', 10)
-        pdf.cell(200, 10, txt=remove_pl_chars("Wygenerowano z Systemu Rozliczania Harmonogramow v2. Dokument wewnetrzny."), ln=True)
+        pdf.set_font("Arial", 'I', 9)
+        pdf.cell(200, 6, txt=remove_pl_chars("Wygenerowano z Systemu Rozliczania Harmonogramów v2. Dokument wewnętrzny."), ln=True)
         
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         pdf.output(tmp.name)
@@ -141,6 +205,10 @@ if 'groups_df' not in st.session_state:
     st.session_state.groups_df = pd.DataFrame(DEFAULT_GROUPS)
 if 'employees_df' not in st.session_state:
     st.session_state.employees_df = pd.DataFrame(DEFAULT_EMPLOYEES)
+if 'special_bonuses_df' not in st.session_state:
+    st.session_state.special_bonuses_df = pd.DataFrame(
+        columns=["Pracownik", "Kwota netto premii", "Kto przyznał", "Powód przyznania premii"]
+    )
 
 # Inicjalizacja stanów konfiguracyjnych w session_state
 if 'avg_lines_12m' not in st.session_state: st.session_state.avg_lines_12m = 17322.50
@@ -471,6 +539,7 @@ with tab_calc:
         st.subheader("⏱️ Zestawienie Nadgodzin Pracowników (Dzień po Dniu)")
         st.caption("Tabela przedstawia liczbę nadgodzin zarejestrowanych dla każdego pracownika w poszczególnych dniach miesiąca wraz z wyliczoną kwotą.")
         
+        overtime_pivot = pd.DataFrame()
         if not df_sched.empty and "NADGODZINY (godz.)" in df_sched.columns:
             overtime_pivot = df_sched.pivot_table(
                 index=["OSOBA", "STANOWISKO"], 
@@ -620,6 +689,32 @@ with tab_calc:
         st.markdown(f"**Suma godzin wszystkich pracowników:** {st.session_state.pallet_truck_employees_df['Ilość godzin'].sum():.1f} h")
 
         st.markdown("---")
+        st.subheader("⭐ Premia specjalna")
+        st.caption("Dodaj premie specjalne dla pracowników. Możesz dodawać nowe wiersze, wpisywać nazwisko pracownika, kwotę netto, osobę przyznającą oraz powód przyznania.")
+
+        if st.session_state.special_bonuses_df.empty:
+            st.session_state.special_bonuses_df = pd.DataFrame(
+                [{"Pracownik": "", "Kwota netto premii": 0.0, "Kto przyznał": "", "Powód przyznania premii": ""}],
+                columns=["Pracownik", "Kwota netto premii", "Kto przyznał", "Powód przyznania premii"]
+            )
+
+        edited_special_df = st.data_editor(
+            st.session_state.special_bonuses_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "Kwota netto premii": st.column_config.NumberColumn(
+                    "Kwota netto premii",
+                    format="%.2f zł",
+                    min_value=0.0,
+                    step=10.0
+                )
+            },
+            key="editor_special_bonuses"
+        )
+        st.session_state.special_bonuses_df = edited_special_df
+
+        st.markdown("---")
         colA, colB = st.columns(2)
         with colA:
             if st.button("💾 Zapisz do archiwum (v2)", type="primary"):
@@ -639,7 +734,15 @@ with tab_calc:
                 st.success("Zapisano dane v2 do archiwum wraz z parametrami porównawczymi!")
         with colB:
             if not calc_df.empty:
-                pdf_bytes = generate_pdf_slips(calc_df, period_key, indicator)
+                pdf_bytes = generate_pdf_slips(
+                    calc_df, 
+                    period_key, 
+                    indicator, 
+                    overtime_pivot if not overtime_pivot.empty else pd.DataFrame(),
+                    st.session_state.get('pallet_employees_df', pd.DataFrame()),
+                    st.session_state.get('pallet_truck_employees_df', pd.DataFrame()),
+                    st.session_state.get('special_bonuses_df', pd.DataFrame())
+                )
                 st.download_button(
                     label="📄 Pobierz paski premiowe (PDF v2)", 
                     data=pdf_bytes, 
