@@ -498,14 +498,53 @@ with tab_calc:
             cur_lines = get_col_sum_flexible(prod_df, ['pozycje', 'Pozycje'])
             cur_weight = get_col_sum_flexible(prod_df, ['Waga łączna', 'Waga laczna', 'Waga'])
 
+        # Obliczenia odchyleń i procentów względem średniej rocznej
         dev_pcs = (cur_pcs - st.session_state.avg_pcs_12m) / st.session_state.avg_pcs_12m if st.session_state.avg_pcs_12m > 0 else 0.0
         dev_lines = (cur_lines - st.session_state.avg_lines_12m) / st.session_state.avg_lines_12m if st.session_state.avg_lines_12m > 0 else 0.0
         dev_weight = (cur_weight - st.session_state.avg_weight_12m) / st.session_state.avg_weight_12m if st.session_state.avg_weight_12m > 0 else 0.0
         
         indicator = (dev_pcs * w_pcs_frac + dev_lines * w_lines_frac + dev_weight * w_weight_frac)
-        
         bonus_rate = indicator * (step_bonus_pct / 0.10) if indicator > 0 else 0.0
         max_bonus_per_emp = base_salary * bonus_rate
+
+        # --- SEKCJA GŁÓWNA: Wyniki miesiąca w odniesieniu do średniej rocznej ---
+        st.markdown("---")
+        st.subheader("📌 Wyniki Bieżącego Miesiąca vs Średnia Roczna")
+        st.caption("Poniższa tabela przedstawia zestawienie ilościowe oraz procentowe odchylenie od 12-miesięcznej bazy dla poszczególnych wskaźników produkcyjnych.")
+
+        comparison_data = [
+            {
+                "Parametr produkcyjny": "Pozycje",
+                "Wartość w miesiącu": f"{cur_lines:,.2f}".replace(",", " ").replace(".", ","),
+                "Średnia roczna (baza)": f"{st.session_state.avg_lines_12m:,.2f}".replace(",", " ").replace(".", ","),
+                "Różnica ilościowa": f"{(cur_lines - st.session_state.avg_lines_12m):+,.2f}".replace(",", " ").replace(".", ","),
+                "Odchylenie procentowe (%)": f"{dev_lines * 100:+.2f}%".replace(".", ","),
+                "Waga wskaźnika": f"{st.session_state.w_lines:.2f}%".replace(".", ",")
+            },
+            {
+                "Parametr produkcyjny": "Sztuki",
+                "Wartość w miesiącu": f"{cur_pcs:,.2f}".replace(",", " ").replace(".", ","),
+                "Średnia roczna (baza)": f"{st.session_state.avg_pcs_12m:,.2f}".replace(",", " ").replace(".", ","),
+                "Różnica ilościowa": f"{(cur_pcs - st.session_state.avg_pcs_12m):+,.2f}".replace(",", " ").replace(".", ","),
+                "Odchylenie procentowe (%)": f"{dev_pcs * 100:+.2f}%".replace(".", ","),
+                "Waga wskaźnika": f"{st.session_state.w_pcs:.2f}%".replace(".", ",")
+            },
+            {
+                "Parametr produkcyjny": "Waga towaru",
+                "Wartość w miesiącu": f"{cur_weight:,.2f} kg".replace(",", " ").replace(".", ","),
+                "Średnia roczna (baza)": f"{st.session_state.avg_weight_12m:,.2f} kg".replace(",", " ").replace(".", ","),
+                "Różnica ilościowa": f"{(cur_weight - st.session_state.avg_weight_12m):+,.2f} kg".replace(",", " ").replace(".", ","),
+                "Odchylenie procentowe (%)": f"{dev_weight * 100:+.2f}%".replace(".", ","),
+                "Waga wskaźnika": f"{st.session_state.w_weight:.2f}%".replace(".", ",")
+            }
+        ]
+        st.dataframe(pd.DataFrame(comparison_data), use_container_width=True, hide_index=True)
+
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric("Wskaźnik Wykonania Działu", f"{indicator*100:.2f}%")
+        col_m2.metric("Stawka Premii (proporcjonalna)", f"{bonus_rate*100:.2f}%")
+        col_m3.metric("Faktyczna Premia na pracownika", f"{max_bonus_per_emp:.2f} PLN")
+        st.markdown("---")
 
         summary_list = []
         for name, group in df_sched.groupby("OSOBA"):
@@ -524,11 +563,6 @@ with tab_calc:
         calc_df = pd.DataFrame(summary_list)
         st.session_state.current_calc_df = calc_df
         st.session_state.current_indicator = indicator
-
-        col_m1, col_m2, col_m3 = st.columns(3)
-        col_m1.metric("Wskaźnik Wykonania Działu", f"{indicator*100:.2f}%")
-        col_m2.metric("Stawka Premii (proporcjonalna)", f"{bonus_rate*100:.2f}%")
-        col_m3.metric("Premia na pracownika", f"{max_bonus_per_emp:.2f} PLN")
 
         st.subheader("Rozliczenie Premiowe Pracowników (v2)")
         st.dataframe(calc_df.style.format({
@@ -550,7 +584,6 @@ with tab_calc:
             
             date_cols = [c for c in overtime_pivot.columns if c not in ["OSOBA", "STANOWISKO"]]
             
-            # Wymuszenie zaokrąglenia do 1 miejsca po przecinku dla wszystkich kolumn z dniami
             for col in date_cols:
                 overtime_pivot[col] = pd.to_numeric(overtime_pivot[col], errors='coerce').fillna(0.0).round(1)
             
@@ -570,7 +603,6 @@ with tab_calc:
             cols_order = ["OSOBA", "STANOWISKO", "Suma Nadgodzin (h)", "Kwota za nadgodziny (PLN)"] + date_cols
             overtime_pivot = overtime_pivot[cols_order]
             
-            # Słownik formatowania dla tabeli (1 miejsce po przecinku dla godzin)
             format_dict = {col: "{:.1f} h" for col in date_cols}
             format_dict["Suma Nadgodzin (h)"] = "{:.1f} h"
             format_dict["Kwota za nadgodziny (PLN)"] = "{:.2f} zł"
