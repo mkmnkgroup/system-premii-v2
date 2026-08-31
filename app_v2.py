@@ -8,6 +8,7 @@ import holidays
 import plotly.express as px
 from fpdf import FPDF
 import tempfile
+import io
 
 # ==========================================
 # KONFIGURACJA I CSS - V2
@@ -153,8 +154,8 @@ if 'employees_df' not in st.session_state:
 @st.fragment
 def schedule_editor_fragment():
     if not st.session_state.current_schedule_df.empty:
-        col_btn, _ = st.columns([1, 3])
-        with col_btn:
+        col_btn1, col_btn2, _ = st.columns([1, 1, 2])
+        with col_btn1:
             if st.button("⏱️ Uzupełnij godziny pracy", use_container_width=True):
                 def fill_start(row):
                     if row["NIEOBECNOŚĆ"] != "Brak":
@@ -179,6 +180,19 @@ def schedule_editor_fragment():
                 st.session_state.current_schedule_df["GODZINA ROZPOCZĘCIA"] = st.session_state.current_schedule_df.apply(fill_start, axis=1)
                 st.session_state.current_schedule_df["GODZINA ZAKOŃCZENIA"] = st.session_state.current_schedule_df.apply(fill_end, axis=1)
                 st.success("Automatycznie uzupełniono godziny pracy oraz nieobecności!")
+
+        with col_btn2:
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                st.session_state.current_schedule_df.to_excel(writer, index=False, sheet_name='Harmonogram')
+            buffer.seek(0)
+            st.download_button(
+                label="📥 Pobierz Harmonogram (Excel)",
+                data=buffer,
+                file_name="Harmonogram.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
 
         edited_df = st.data_editor(
             st.session_state.current_schedule_df,
@@ -435,7 +449,6 @@ with tab_calc:
         
         indicator = (dev_pcs * w_pcs_frac + dev_lines * w_lines_frac + dev_weight * w_weight_frac)
         
-        # Ciągłe wyliczanie proporcjonalne dokładnie do 2 miejsc po przecinku (4% za każde 10% -> mnożnik 0.04 / 0.10 = 0.4)
         bonus_rate = indicator * (step_bonus_pct / 0.10) if indicator > 0 else 0.0
         max_bonus_per_emp = base_salary * bonus_rate
 
