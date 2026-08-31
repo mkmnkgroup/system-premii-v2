@@ -478,7 +478,7 @@ with tab_calc:
         st.warning("Najpierw wygeneruj harmonogram w pierwszej zakładce!")
     else:
         base_salary = 4300.0
-        step_bonus_pct = 0.04  # 4% premii bazowej za każde 10%
+        step_bonus_pct = 0.04 
 
         w_pcs_frac = st.session_state.w_pcs / 100.0
         w_lines_frac = st.session_state.w_lines / 100.0
@@ -608,7 +608,6 @@ with tab_calc:
 
         num_workers_pallets = len(st.session_state.pallet_employees_df)
         share_per_worker_pallet = (total_pallet_amount / num_workers_pallets) if num_workers_pallets > 0 and total_pallet_amount > 0 else 0.0
-
         st.session_state.pallet_employees_df["Kwota za załadunki (PLN)"] = share_per_worker_pallet
 
         edited_pallet_df = st.data_editor(
@@ -627,10 +626,6 @@ with tab_calc:
 
         if not edited_pallet_df.equals(st.session_state.pallet_employees_df):
             st.session_state.pallet_employees_df = edited_pallet_df
-            num_workers_pallets = len(st.session_state.pallet_employees_df)
-            share_per_worker_pallet = (total_pallet_amount / num_workers_pallets) if num_workers_pallets > 0 and total_pallet_amount > 0 else 0.0
-            st.session_state.pallet_employees_df["Kwota za załadunki (PLN)"] = share_per_worker_pallet
-            st.rerun()
 
         st.markdown("---")
         st.subheader("🚜 Obsługa paleciaka")
@@ -662,9 +657,10 @@ with tab_calc:
             column_config={
                 "Ilość godzin": st.column_config.NumberColumn(
                     "Ilość godzin",
+                    format="%.2f h",
                     min_value=0.0,
-                    step=1.0,
-                    format="%.1f h"
+                    step=0.5,
+                    help="Wpisz liczbę przepracowanych godzin"
                 ),
                 "Kwota (PLN)": st.column_config.NumberColumn(
                     "Kwota (PLN)",
@@ -677,29 +673,10 @@ with tab_calc:
 
         if not edited_pt_df.equals(st.session_state.pallet_truck_employees_df):
             st.session_state.pallet_truck_employees_df = edited_pt_df
-            total_pt_hours = st.session_state.pallet_truck_employees_df["Ilość godzin"].sum()
-            st.session_state.pallet_truck_employees_df["Kwota (PLN)"] = st.session_state.pallet_truck_employees_df.apply(
-                lambda row: (row["Ilość godzin"] / total_pt_hours) * total_pt_pool if total_pt_hours > 0 else 0.0, 
-                axis=1
-            )
-            st.rerun()
-
-        st.session_state.pallet_truck_employees_df = edited_pt_df
-
-        st.markdown(f"**Suma godzin wszystkich pracowników:** {st.session_state.pallet_truck_employees_df['Ilość godzin'].sum():.1f} h")
 
         st.markdown("---")
-        st.subheader("⭐ Premia specjalna")
-        st.caption("Dodaj premie specjalne dla pracowników. Pracownicy są wybierani z listy osób z harmonogramu na dany miesiąc.")
-
-        if st.session_state.special_bonuses_df.empty:
-            st.session_state.special_bonuses_df = pd.DataFrame(
-                [{"Pracownik": "", "Kwota netto premii": 0.0, "Kto przyznał": "", "Powód przyznania premii": ""}],
-                columns=["Pracownik", "Kwota netto premii", "Kto przyznał", "Powód przyznania premii"]
-            )
-
-        # Pobranie listy unikalnych pracowników z aktualnego harmonogramu
-        schedule_employees = df_sched["OSOBA"].unique().tolist() if not df_sched.empty else []
+        st.subheader("🌟 Premia Specjalna")
+        st.caption("Dodaj indywidualne premie specjalne dla pracowników za ten okres.")
 
         edited_special_df = st.data_editor(
             st.session_state.special_bonuses_df,
@@ -708,237 +685,129 @@ with tab_calc:
             column_config={
                 "Pracownik": st.column_config.SelectboxColumn(
                     "Pracownik",
-                    options=schedule_employees,
-                    required=True,
-                    help="Wybierz pracownika z harmonogramu na dany miesiąc"
+                    options=calc_df["Pracownik"].tolist() if not calc_df.empty else [],
+                    required=True
                 ),
                 "Kwota netto premii": st.column_config.NumberColumn(
                     "Kwota netto premii",
                     format="%.2f zł",
                     min_value=0.0,
-                    step=10.0
+                    step=50.0
                 )
             },
             key="editor_special_bonuses"
         )
-        st.session_state.special_bonuses_df = edited_special_df
+        if not edited_special_df.equals(st.session_state.special_bonuses_df):
+            st.session_state.special_bonuses_df = edited_special_df
 
         st.markdown("---")
-        colA, colB = st.columns(2)
-        with colA:
-            if st.button("💾 Zapisz do archiwum (v2)", type="primary"):
-                st.session_state.history_v2[period_key] = {
-                    "df": calc_df.copy(), 
-                    "schedule_df": df_sched.copy(),
-                    "indicator": indicator,
-                    "bonus_per_emp": max_bonus_per_emp,
-                    "actual_pcs": cur_pcs,
-                    "actual_lines": cur_lines,
-                    "actual_weight": cur_weight,
-                    "base_pcs": st.session_state.avg_pcs_12m,
-                    "base_lines": st.session_state.avg_lines_12m,
-                    "base_weight": st.session_state.avg_weight_12m
-                }
-                save_archive(st.session_state.history_v2)
-                st.success("Zapisano dane v2 do archiwum wraz z parametrami porównawczymi!")
-        with colB:
-            if not calc_df.empty:
-                pdf_bytes = generate_pdf_slips(
-                    calc_df, 
-                    period_key, 
-                    indicator, 
-                    overtime_pivot if not overtime_pivot.empty else pd.DataFrame(),
-                    st.session_state.get('pallet_employees_df', pd.DataFrame()),
-                    st.session_state.get('pallet_truck_employees_df', pd.DataFrame()),
-                    st.session_state.get('special_bonuses_df', pd.DataFrame())
+        st.subheader("📥 Generowanie Pasków i Archiwizacja")
+        
+        col_act1, col_act2 = st.columns(2)
+        with col_act1:
+            if st.button("📄 Generuj Paski w PDF dla wszystkich", type="primary", use_container_width=True):
+                pdf_data = generate_pdf_slips(
+                    calc_df, period_key, indicator, 
+                    overtime_pivot, st.session_state.pallet_employees_df, 
+                    st.session_state.pallet_truck_employees_df, 
+                    st.session_state.special_bonuses_df
                 )
                 st.download_button(
-                    label="📄 Pobierz paski premiowe (PDF v2)", 
-                    data=pdf_bytes, 
-                    file_name=f"Paski_Premiowe_v2_{period_key}.pdf", 
-                    mime="application/pdf"
+                    label="⬇️ Pobierz plik PDF z paskami",
+                    data=pdf_data,
+                    file_name=f"Paski_premiowe_{period_key.replace(' ', '_')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
                 )
+        with col_act2:
+            if st.button("💾 Zapisz okres do Archiwum", use_container_width=True):
+                st.session_state.history_v2[period_key] = {
+                    "calc_df": calc_df,
+                    "schedule_df": df_sched,
+                    "overtime_df": overtime_pivot,
+                    "pallet_df": st.session_state.pallet_employees_df,
+                    "pt_df": st.session_state.pallet_truck_employees_df,
+                    "special_df": st.session_state.special_bonuses_df,
+                    "indicator": indicator
+                }
+                save_archive(st.session_state.history_v2)
+                st.success(f"Okres '{period_key}' został pomyślnie zarchiwizowany!")
 
 # ==========================================
 # ZAKŁADKA 3: DASHBOARD I WYKRESY
 # ==========================================
 with tab_dash:
-    st.header("📊 Dashboard Analityczny v2")
-    if st.session_state.history_v2:
-        hist_data = [{"Miesiąc": k, "Wskaźnik (%)": v["indicator"] * 100, "Premia (PLN)": v.get("bonus_per_emp", 0.0)} for k, v in st.session_state.history_v2.items()]
-        df_trend = pd.DataFrame(hist_data)
-        fig = px.line(df_trend, x="Miesiąc", y="Wskaźnik (%)", markers=True, title="Historia Wskaźnika Premiowego Działu (v2)")
-        st.plotly_chart(fig, use_container_width=True)
+    st.header("📊 Dashboard i Analiza Danych v2")
+    if st.session_state.current_schedule_df.empty:
+        st.warning("Najpierw wygeneruj harmonogram i uzupełnij dane w poprzednich zakładkach.")
     else:
-        st.info("Brak zapisanych miesięcy w archiwum v2. Wygeneruj i zapisz miesiąc, aby wyświetlić trendy.")
+        if 'current_calc_df' in st.session_state and not st.session_state.current_calc_df.empty:
+            df_c = st.session_state.current_calc_df
+            fig = px.bar(df_c, x="Pracownik", y="Premia netto (PLN)", color="Stanowisko", title="Wysokość premii netto dla pracowników")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Przejdź do zakładki Kalkulator Premii, aby wyliczyć dane do wykresów.")
 
 # ==========================================
-# ZAKŁADKA 4: ARCHIWUM
+# ZAKŁADKA 4: ARCHIWUM HISTORYCZNE
 # ==========================================
 with tab_history:
     st.header("📁 Archiwum Historyczne v2")
-    if st.session_state.history_v2:
-        selected_hist = st.selectbox("Wybierz miesiąc z bazy v2:", list(st.session_state.history_v2.keys()))
-        hist_data = st.session_state.history_v2[selected_hist]
-        st.dataframe(hist_data["df"].style.format({"Premia netto (PLN)": "{:.2f} zł"}), use_container_width=True)
+    if not st.session_state.history_v2:
+        st.info("Brak zarchiwizowanych okresów w bazie.")
     else:
-        st.info("Brak wpisów w archiwum v2.")
+        arch_periods = list(st.session_state.history_v2.keys())
+        selected_arch = st.selectbox("Wybierz okres z archiwum:", arch_periods, key="select_arch_period")
+        if selected_arch:
+            arch_data = st.session_state.history_v2[selected_arch]
+            st.subheader(f"Dane dla okresu: {selected_arch}")
+            st.metric("Wskaźnik Działu", f"{arch_data.get('indicator', 0)*100:.2f}%")
+            if "calc_df" in arch_data:
+                st.dataframe(arch_data["calc_df"], use_container_width=True)
 
 # ==========================================
 # ZAKŁADKA 5: PORÓWNANIE WYNIKÓW
 # ==========================================
 with tab_comp:
-    st.header("📈 Porównanie Parametrów i Wyników (Miesiąc do Miesiąca)")
-    st.markdown("Ta zakładka przedstawia zestawienie celów (bazowych średnich 12M) w stosunku do faktycznie osiągniętych wyników produkcyjnych we wszystkich zapisanych miesiącach.")
-
-    if st.session_state.history_v2:
-        comp_rows = []
-        for m_key, m_data in st.session_state.history_v2.items():
-            if "actual_pcs" in m_data:
-                comp_rows.append({
-                    "Miesiąc": m_key,
-                    "Cel Sztuki": m_data["base_pcs"],
-                    "Wynik Sztuki": m_data["actual_pcs"],
-                    "Cel Pozycje": m_data["base_lines"],
-                    "Wynik Pozycje": m_data["actual_lines"],
-                    "Cel Waga": m_data["base_weight"],
-                    "Wynik Waga": m_data["actual_weight"],
-                    "Wskaźnik Działu (%)": m_data["indicator"] * 100
-                })
-        
-        if comp_rows:
-            df_comp = pd.DataFrame(comp_rows)
-            st.subheader("Tabela Porównawcza Zestawienia Celów i Wyników")
-            st.dataframe(df_comp.style.format({
-                "Cel Sztuki": "{:,.2f}",
-                "Wynik Sztuki": "{:,.2f}",
-                "Cel Pozycje": "{:,.2f}",
-                "Wynik Pozycje": "{:,.2f}",
-                "Cel Waga": "{:,.2f}",
-                "Wynik Waga": "{:,.2f}",
-                "Wskaźnik Działu (%)": "{:.2f}%"
-            }), use_container_width=True)
-            
-            st.markdown("---")
-            st.subheader("Wykres Porównawczy (Cel vs Wynik)")
-            selected_param = st.selectbox("Wybierz parametr do analizy graficznej:", ["Sztuki", "Pozycje", "Waga łączna"])
-            
-            if selected_param == "Sztuki":
-                fig_comp = px.bar(df_comp, x="Miesiąc", y=["Cel Sztuki", "Wynik Sztuki"], barmode="group", title="Porównanie: Cel (12M) vs Wynik Rzeczywisty – Sztuki")
-            elif selected_param == "Pozycje":
-                fig_comp = px.bar(df_comp, x="Miesiąc", y=["Cel Pozycje", "Wynik Pozycje"], barmode="group", title="Porównanie: Cel (12M) vs Wynik Rzeczywisty – Pozycje przyjęte")
-            else:
-                fig_comp = px.bar(df_comp, x="Miesiąc", y=["Cel Waga", "Wynik Waga"], barmode="group", title="Porównanie: Cel (12M) vs Wynik Rzeczywisty – Waga łączna")
-                
-            st.plotly_chart(fig_comp, use_container_width=True)
-        else:
-            st.info("Zapisz bieżący miesiąc z wgranym plikiem produkcyjnym w zakładce *Kalkulator Premii*, aby zasilić tę tablicę porównawczą.")
+    st.header("📈 Porównanie Wyników v2")
+    if len(st.session_state.history_v2) < 2:
+        st.info("Zapisz co najmniej dwa okresy w archiwum, aby móc je porównać.")
     else:
-        st.info("Brak zapisanych danych w archiwum v2. Wygeneruj i zapisz co najmniej jeden miesiąc.")
+        p_list = list(st.session_state.history_v2.keys())
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            p1 = st.selectbox("Okres 1:", p_list, index=0, key="comp_p1")
+        with col_p2:
+            p2 = st.selectbox("Okres 2:", p_list, index=min(1, len(p_list)-1), key="comp_p2")
+        
+        if p1 and p2:
+            ind1 = st.session_state.history_v2[p1].get("indicator", 0) * 100
+            ind2 = st.session_state.history_v2[p2].get("indicator", 0) * 100
+            st.metric(f"Wskaźnik {p1}", f"{ind1:.2f}%")
+            st.metric(f"Wskaźnik {p2}", f"{ind2:.2f}%", delta=f"{ind2 - ind1:.2f}%")
 
 # ==========================================
-# ZAKŁADKA 6: USTAWIENIA (GŁÓWNA)
+# ZAKŁADKA 6: USTAWIENIA
 # ==========================================
 with tab_settings:
-    st.header("⚙️ Ustawienia i Konfiguracja Systemu")
+    st.header("⚙️ Ustawienia Systemu v2")
+    st.subheader("Średnie 12-miesięczne (baza do wskaźnika)")
+    st.session_state.avg_lines_12m = st.number_input("Średnia liczba pozycji 12m:", value=st.session_state.avg_lines_12m, key="set_avg_lines")
+    st.session_state.w_lines = st.number_input("Waga pozycji (%):", value=st.session_state.w_lines, key="set_w_lines")
+    
+    st.session_state.avg_pcs_12m = st.number_input("Średnia sztuk 12m:", value=st.session_state.avg_pcs_12m, key="set_avg_pcs")
+    st.session_state.w_pcs = st.number_input("Waga sztuk (%):", value=st.session_state.w_pcs, key="set_w_pcs")
+    
+    st.session_state.avg_weight_12m = st.number_input("Średnia waga 12m:", value=st.session_state.avg_weight_12m, key="set_avg_weight")
+    st.session_state.w_weight = st.number_input("Waga wagi (%):", value=st.session_state.w_weight, key="set_w_weight")
 
-    set_sub_tab1, set_sub_tab2, set_sub_tab3 = st.tabs([
-        "📋 Konfiguracja i Ustawienia Harmonogramu", 
-        "💰 Konfiguracja premii głównej", 
-        "➕ Konfiguracje innych dodatków Premii"
-    ])
+    st.subheader("Stawki Nadgodzin i Palet")
+    st.session_state.ot_kierownik = st.number_input("Nadgodziny Kierownik (zł/h):", value=st.session_state.ot_kierownik, key="set_ot_kier")
+    st.session_state.ot_brygadzista = st.number_input("Nadgodziny Brygadzista (zł/h):", value=st.session_state.ot_brygadzista, key="set_ot_bryg")
+    st.session_state.ot_magazynier = st.number_input("Nadgodziny Magazynier (zł/h):", value=st.session_state.ot_magazynier, key="set_ot_mag")
+    st.session_state.rate_pallet = st.number_input("Stawka za paletę (zł):", value=st.session_state.rate_pallet, key="set_rate_pal")
+    st.session_state.pallet_pool = st.number_input("Pula na obsługę paleciaka (zł):", value=st.session_state.pallet_pool, key="set_pal_pool")
 
-    # 1. Konfiguracja i Ustawienia Harmonogramu
-    with set_sub_tab1:
-        set_tab1, set_tab2, set_tab3 = st.tabs([
-            "🚫 Powody nieobecności", 
-            "🕒 Grupy i Czas Pracy", 
-            "👥 Lista Pracowników"
-        ])
-
-        with set_tab1:
-            st.subheader("Modyfikacja powodów nieobecności")
-            st.caption("Dodawaj nowe pozycje bezpośrednio w tabeli, edytuj istniejące lub usuwaj zaznaczone wiersze.")
-            
-            df_reasons_editable = pd.DataFrame({"Powód nieobecności": st.session_state.absence_reasons})
-            edited_reasons_df = st.data_editor(
-                df_reasons_editable,
-                num_rows="dynamic",
-                use_container_width=True,
-                key="editor_absence_reasons"
-            )
-            if not edited_reasons_df.empty:
-                st.session_state.absence_reasons = edited_reasons_df["Powód nieobecności"].dropna().astype(str).tolist()
-
-        with set_tab2:
-            st.subheader("Modyfikacja grup oraz godzin pracy")
-            st.caption("Możesz zmieniać nazwy grup, godziny pracy lub dodawać nowe wiersze.")
-            
-            edited_groups_df = st.data_editor(
-                st.session_state.groups_df,
-                num_rows="dynamic",
-                use_container_width=True,
-                key="editor_groups"
-            )
-            st.session_state.groups_df = edited_groups_df
-
-        with set_tab3:
-            st.subheader("Modyfikacja pracowników, grup i stanowisk")
-            st.caption("Zarządzaj zespołem, przypisuj grupy, przedziały dni pracujących (system), stanowiska i funkcje.")
-            
-            available_group_names = st.session_state.groups_df["Nazwa grupy"].dropna().astype(str).tolist()
-            
-            edited_employees_df = st.data_editor(
-                st.session_state.employees_df,
-                num_rows="dynamic",
-                use_container_width=True,
-                column_config={
-                    "GRUPA": st.column_config.SelectboxColumn(
-                        "GRUPA",
-                        options=available_group_names,
-                        required=True,
-                        help="Wybierz przypisaną grupę"
-                    ),
-                    "SYSTEM": st.column_config.SelectboxColumn(
-                        "SYSTEM",
-                        options=["PONIEDZIAŁEK-PIĄTEK", "WTOREK-SOBOTA"],
-                        required=True,
-                        help="Wybierz przedział dni pracujących"
-                    )
-                },
-                key="editor_employees"
-            )
-            st.session_state.employees_df = edited_employees_df
-
-    # 2. Konfiguracja premii głównej
-    with set_sub_tab2:
-        st.subheader("Konfiguracja premii głównej")
-        st.caption("Parametry oraz wagi do wyliczania premii głównej.")
-
-        st.session_state.avg_lines_12m = st.number_input("Średnia 12M (Pozycje przyjęte):", value=st.session_state.avg_lines_12m, step=100.0, format="%.2f", key="input_avg_lines")
-        st.session_state.w_lines = st.number_input("Waga % (Pozycje przyjęte):", value=st.session_state.w_lines, step=0.01, format="%.2f", key="input_w_lines")
-
-        st.session_state.avg_pcs_12m = st.number_input("Średnia 12M (Sztuki):", value=st.session_state.avg_pcs_12m, step=100.0, format="%.2f", key="input_avg_pcs")
-        st.session_state.w_pcs = st.number_input("Waga % (Sztuki):", value=st.session_state.w_pcs, step=0.01, format="%.2f", key="input_w_pcs")
-
-        st.session_state.avg_weight_12m = st.number_input("Średnia 12M (Waga łączna):", value=st.session_state.avg_weight_12m, step=100.0, format="%.2f", key="input_avg_weight")
-        st.session_state.w_weight = st.number_input("Waga % (Waga łączna):", value=st.session_state.w_weight, step=0.01, format="%.2f", key="input_w_weight")
-
-        total_w = st.session_state.w_pcs + st.session_state.w_lines + st.session_state.w_weight
-        st.caption(f"Suma wag: **{total_w:.2f}%**")
-
-    # 3. Konfiguracje innych dodatków Premii
-    with set_sub_tab3:
-        st.subheader("Konfiguracje innych dodatków Premii")
-        st.markdown("Określ stawki oraz pule budżetowe dla dodatkowych elementów wynagrodzenia.")
-
-        st.markdown("### Nadgodziny")
-        st.session_state.ot_kierownik = st.number_input("Stawka za nadgodziny kierownik (zł/h):", value=st.session_state.ot_kierownik, step=1.0, format="%.2f", key="input_ot_kierownik")
-        st.session_state.ot_brygadzista = st.number_input("Stawka za nadgodziny brygadzista (zł/h):", value=st.session_state.ot_brygadzista, step=1.0, format="%.2f", key="input_ot_brygadzista")
-        st.session_state.ot_magazynier = st.number_input("Stawka za nadgodziny magazynier (zł/h):", value=st.session_state.ot_magazynier, step=1.0, format="%.2f", key="input_ot_magazynier")
-
-        st.markdown("### Załadunki / Rozładunki")
-        st.session_state.rate_pallet = st.number_input("Stawka za paletę (zł netto):", value=st.session_state.rate_pallet, step=0.5, format="%.2f", key="input_rate_pallet")
-
-        st.markdown("### Obsługa paleciaka")
-        st.session_state.pallet_pool = st.number_input("Pula do podziału (zł netto):", value=st.session_state.pallet_pool, step=50.0, format="%.2f", key="input_pallet_pool")
+    st.subheader("Zarządzanie Pracownikami i Grupami")
+    st.session_state.employees_df = st.data_editor(st.session_state.employees_df, num_rows="dynamic", use_container_width=True, key="set_employees_editor")
+    st.session_state.groups_df = st.data_editor(st.session_state.groups_df, num_rows="dynamic", use_container_width=True, key="set_groups_editor")
