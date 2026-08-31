@@ -469,7 +469,7 @@ with tab_calc:
 
         st.markdown("---")
         st.subheader("⏱️ Zestawienie Nadgodzin Pracowników (Dzień po Dniu)")
-        st.caption("Tabela przedstawia liczbę nadgodzin zarejestrowanych dla każdego pracownika w poszczególnych dniach miesiąca.")
+        st.caption("Tabela przedstawia liczbę nadgodzin zarejestrowanych dla każdego pracownika w poszczególnych dniach miesiąca wraz z wyliczoną kwotą.")
         
         if not df_sched.empty and "NADGODZINY (godz.)" in df_sched.columns:
             overtime_pivot = df_sched.pivot_table(
@@ -480,9 +480,27 @@ with tab_calc:
             ).reset_index()
             
             date_cols = [c for c in overtime_pivot.columns if c not in ["OSOBA", "STANOWISKO"]]
+            
             overtime_pivot["Suma Nadgodzin (h)"] = overtime_pivot[date_cols].sum(axis=1)
             
-            st.dataframe(overtime_pivot, use_container_width=True)
+            def get_ot_rate(pos):
+                p = str(pos).strip().upper()
+                if "KIEROWNIK" in p:
+                    return st.session_state.ot_kierownik
+                elif "BRYGADZISTA" in p:
+                    return st.session_state.ot_brygadzista
+                else:
+                    return st.session_state.ot_magazynier
+            
+            overtime_pivot["Kwota za nadgodziny (PLN)"] = overtime_pivot["Suma Nadgodzin (h)"] * overtime_pivot["STANOWISKO"].apply(get_ot_rate)
+            
+            cols_order = ["OSOBA", "STANOWISKO", "Suma Nadgodzin (h)", "Kwota za nadgodziny (PLN)"] + date_cols
+            overtime_pivot = overtime_pivot[cols_order]
+            
+            st.dataframe(overtime_pivot.style.format({
+                "Suma Nadgodzin (h)": "{:.2f} h",
+                "Kwota za nadgodziny (PLN)": "{:.2f} zł"
+            }), use_container_width=True)
             
             buffer_ot = io.BytesIO()
             with pd.ExcelWriter(buffer_ot, engine='openpyxl') as writer:
@@ -495,6 +513,88 @@ with tab_calc:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
+
+        st.markdown("---")
+        st.subheader("📦 Załadunki / Rozładunki")
+        st.caption("Wpisz całkowitą liczbę palet załadowanych/rozładowanych w miesiącu. Kwota zostanie wyliczona na podstawie stawki z ustawień i proporcjonalnie podzielona na pracowników w tabeli poniżej.")
+        
+        total_pallets_month = st.number_input(
+            "Ilość palet załadowanych/rozładowanych w danym miesiącu:", 
+            value=0.0, 
+            step=10.0, 
+            format="%.1f",
+            key="input_total_pallets_month"
+        )
+        
+        total_pallet_amount = total_pallets_month * st.session_state.rate_pallet
+        st.info(f"Całkowita kwota za palety do podziału: **{total_pallet_amount:.2f} zł** (Stawka jednostkowa: {st.session_state.rate_pallet:.2f} zł/paleta)")
+
+        if 'pallet_table_period' not in st.session_state or st.session_state.get('pallet_table_period') != period_key:
+            st.session_state.pallet_employees_df = calc_df[["Pracownik", "Stanowisko"]].copy()
+            st.session_state.pallet_table_period = period_key
+
+        edited_pallet_df = st.data_editor(
+            st.session_state.pallet_employees_df,
+            num_rows="delete",
+            use_container_width=True,
+            key="editor_pallets_workers"
+        )
+        st.session_state.pallet_employees_df = edited_pallet_df
+
+        num_workers_pallets = len(edited_pallet_df)
+        share_per_worker_pallet = (total_pallet_amount / num_workers_pallets) if num_workers_pallets > 0 and total_pallet_amount > 0 else 0.0
+
+        edited_pallet_df["Kwota za załadunki (PLN)"] = share_per_worker_pallet
+
+        st.subheader("Rozliczenie załadunków/rozładunków na pracowników")
+        st.dataframe(edited_pallet_df.style.format({
+            "Kwota za załadunki (PLN)": "{:.2f} zł"
+        }), use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("🚜 Obsługa paleciaka")
+        st.caption("Wpisz liczbę godzin przejeżdżonych przez poszczególnych pracowników. Kwota z puli (z Ustawień) zostanie podzielona proporcjonalnie do przepracowanych godzin.")
+        
+        st.info(f"Pula do podziału na obsługę paleciaka: **{st.session_state.pallet_pool:.2f} zł**")
+
+        if 'pallet_truck_period' not in st.session_state or st.session_state.get('pallet_truck_period') != period_key:
+            initial_pt_data = calc_df[["Pracownik", "Stanowisko"]].copy()
+            initial_pt_data["Ilość godzin"] = 0.0
+            st.session_state.pallet_truck_employees_df = initial_pt_data
+            st.session_state.pallet_truck_period = period_key
+
+        edited_pt_df = st.data_editor(
+            st.session_state.pallet_truck_employees_df,
+            num_rows="delete",
+            use_container_width=True,
+            column_config={
+                "Ilość godzin": st.column_config.NumberColumn(
+                    "Ilość godzin",
+                    min_value=0.0,
+                    step=1.0,
+                    format="%.1f"
+                )
+            },
+            key="editor_pallet_truck_workers"
+        )
+        st.session_state.pallet_truck_employees_df = edited_pt_df
+
+        total_pt_hours = edited_pt_df["Ilość godzin"].sum()
+        total_pt_pool = st.session_state.pallet_pool
+
+        def calc_pt_amount(row):
+            if total_pt_hours > 0:
+                return (row["Ilość godzin"] / total_pt_hours) * total_pt_pool
+            return 0.0
+
+        edited_pt_df["Kwota (PLN)"] = edited_pt_df.apply(calc_pt_amount, axis=1)
+
+        st.markdown(f"**Suma godzin wszystkich pracowników:** {total_pt_hours:.1f} h")
+        st.subheader("Rozliczenie obsługi paleciaka na pracowników")
+        st.dataframe(edited_pt_df.style.format({
+            "Ilość godzin": "{:.1f} h",
+            "Kwota (PLN)": "{:.2f} zł"
+        }), use_container_width=True)
 
         st.markdown("---")
         colA, colB = st.columns(2)
