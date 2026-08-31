@@ -93,12 +93,6 @@ def get_col_sum_flexible(df, possible_names):
             return float(pd.to_numeric(df[col], errors='coerce').fillna(0).sum())
     return 0.0
 
-def highlight_free_days(row):
-    is_free = str(row.get("DZIEŃ PRACUJĄCY/WOLNY", "")).lower() in ["wolny", "święto"] or str(row.get("CZAS ZMIANY", "")).lower() == "wolne"
-    if is_free:
-        return ['background-color: #d4edda'] * len(row)
-    return [''] * len(row)
-
 DEFAULT_ABSENCE_REASONS = [
     "Brak",
     "CHOROBOWE",
@@ -199,16 +193,13 @@ def schedule_editor_fragment():
             if "schedule_editor" in st.session_state:
                 edited_data = st.session_state["schedule_editor"]
                 if isinstance(edited_data, dict):
-                    # Obsługa struktury zmian ze Streamlit data_editor
                     edited_df = st.session_state.current_schedule_df.copy()
                     
-                    # Aktualizacja zmodyfikowanych wierszy/komórek z edytora
                     if "edited_rows" in edited_data:
                         for row_idx, changes in edited_data["edited_rows"].items():
                             for col_name, new_val in changes.items():
                                 edited_df.at[int(row_idx), col_name] = new_val
                     
-                    # Zastosowanie reguł dla nieobecności i dni wolnych
                     mask_absent = edited_df["NIEOBECNOŚĆ"] != "Brak"
                     edited_df.loc[mask_absent, "GODZINA ROZPOCZĘCIA"] = "NIEOBECNY"
                     edited_df.loc[mask_absent, "GODZINA ZAKOŃCZENIA"] = "NIEOBECNY"
@@ -235,7 +226,6 @@ def schedule_editor_fragment():
             on_change=on_editor_change
         )
 
-        # Bezpieczne przepisanie ostatecznego stanu
         if isinstance(edited_df, pd.DataFrame):
             mask_absent = edited_df["NIEOBECNOŚĆ"] != "Brak"
             edited_df.loc[mask_absent, "GODZINA ROZPOCZĘCIA"] = "NIEOBECNY"
@@ -246,10 +236,6 @@ def schedule_editor_fragment():
             edited_df.loc[mask_free, "GODZINA ZAKOŃCZENIA"] = "Wolne"
 
             st.session_state.current_schedule_df = edited_df
-
-        st.markdown("---")
-        st.subheader("👁️ Podgląd harmonogramu z zaznaczonymi dniami wolnymi")
-        st.dataframe(st.session_state.current_schedule_df.style.apply(highlight_free_days, axis=1), use_container_width=True)
 
 # ==========================================
 # ZAKŁADKI GŁÓWNE
@@ -485,6 +471,36 @@ with tab_calc:
             "Premia netto (PLN)": "{:.2f} zł"
         }), use_container_width=True)
 
+        st.markdown("---")
+        st.subheader("⏱️ Zestawienie Nadgodzin Pracowników (Dzień po Dniu)")
+        st.caption("Tabela przedstawia liczbę nadgodzin zarejestrowanych dla każdego pracownika w poszczególnych dniach miesiąca.")
+        
+        if not df_sched.empty and "NADGODZINY (godz.)" in df_sched.columns:
+            overtime_pivot = df_sched.pivot_table(
+                index=["OSOBA", "STANOWISKO"], 
+                columns="DATA", 
+                values="NADGODZINY (godz.)", 
+                fill_value=0.0
+            ).reset_index()
+            
+            date_cols = [c for c in overtime_pivot.columns if c not in ["OSOBA", "STANOWISKO"]]
+            overtime_pivot["Suma Nadgodzin (h)"] = overtime_pivot[date_cols].sum(axis=1)
+            
+            st.dataframe(overtime_pivot, use_container_width=True)
+            
+            buffer_ot = io.BytesIO()
+            with pd.ExcelWriter(buffer_ot, engine='openpyxl') as writer:
+                overtime_pivot.to_excel(writer, index=False, sheet_name='Nadgodziny')
+            buffer_ot.seek(0)
+            st.download_button(
+                label="📥 Pobierz Tabelę Nadgodzin (Excel)",
+                data=buffer_ot,
+                file_name=f"Nadgodziny_{period_key}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+        st.markdown("---")
         colA, colB = st.columns(2)
         with colA:
             if st.button("💾 Zapisz do archiwum (v2)", type="primary"):
