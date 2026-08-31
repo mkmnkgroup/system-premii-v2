@@ -530,7 +530,11 @@ with tab_calc:
         st.info(f"Całkowita kwota za palety do podziału: **{total_pallet_amount:.2f} zł** (Stawka jednostkowa: {st.session_state.rate_pallet:.2f} zł/paleta)")
 
         if 'pallet_table_period' not in st.session_state or st.session_state.get('pallet_table_period') != period_key:
-            st.session_state.pallet_employees_df = calc_df[["Pracownik", "Stanowisko"]].copy()
+            initial_pallet_df = calc_df[["Pracownik", "Stanowisko"]].copy()
+            num_w = len(initial_pallet_df)
+            share_w = (total_pallet_amount / num_w) if num_w > 0 and total_pallet_amount > 0 else 0.0
+            initial_pallet_df["Kwota za załadunki (PLN)"] = share_w
+            st.session_state.pallet_employees_df = initial_pallet_df
             st.session_state.pallet_table_period = period_key
 
         num_workers_pallets = len(st.session_state.pallet_employees_df)
@@ -551,7 +555,13 @@ with tab_calc:
             },
             key="editor_pallets_workers"
         )
-        st.session_state.pallet_employees_df = edited_pallet_df
+
+        if not edited_pallet_df.equals(st.session_state.pallet_employees_df):
+            st.session_state.pallet_employees_df = edited_pallet_df
+            num_workers_pallets = len(st.session_state.pallet_employees_df)
+            share_per_worker_pallet = (total_pallet_amount / num_workers_pallets) if num_workers_pallets > 0 and total_pallet_amount > 0 else 0.0
+            st.session_state.pallet_employees_df["Kwota za załadunki (PLN)"] = share_per_worker_pallet
+            st.rerun()
 
         st.markdown("---")
         st.subheader("🚜 Obsługa paleciaka")
@@ -562,6 +572,7 @@ with tab_calc:
         if 'pallet_truck_period' not in st.session_state or st.session_state.get('pallet_truck_period') != period_key:
             initial_pt_data = calc_df[["Pracownik", "Stanowisko"]].copy()
             initial_pt_data["Ilość godzin"] = 0.0
+            initial_pt_data["Kwota (PLN)"] = 0.0
             st.session_state.pallet_truck_employees_df = initial_pt_data
             st.session_state.pallet_truck_period = period_key
 
@@ -594,6 +605,16 @@ with tab_calc:
             },
             key="editor_pallet_truck_workers"
         )
+
+        if not edited_pt_df.equals(st.session_state.pallet_truck_employees_df):
+            st.session_state.pallet_truck_employees_df = edited_pt_df
+            total_pt_hours = st.session_state.pallet_truck_employees_df["Ilość godzin"].sum()
+            st.session_state.pallet_truck_employees_df["Kwota (PLN)"] = st.session_state.pallet_truck_employees_df.apply(
+                lambda row: (row["Ilość godzin"] / total_pt_hours) * total_pt_pool if total_pt_hours > 0 else 0.0, 
+                axis=1
+            )
+            st.rerun()
+
         st.session_state.pallet_truck_employees_df = edited_pt_df
 
         st.markdown(f"**Suma godzin wszystkich pracowników:** {st.session_state.pallet_truck_employees_df['Ilość godzin'].sum():.1f} h")
