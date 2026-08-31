@@ -85,7 +85,7 @@ def generate_pdf_slips(calc_df, period, indicator, ot_df, pallet_df, pt_df, spec
         pdf.set_font("Arial", 'B', 11)
         pdf.cell(200, 6, txt=remove_pl_chars("2. Nadgodziny:"), ln=True)
         pdf.set_font("Arial", '', 10)
-        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Liczba godzin: {ot_hours:.2f} h"), ln=True)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Liczba godzin: {ot_hours:.1f} h"), ln=True)
         pdf.cell(200, 5, txt=remove_pl_chars(f"   - Kwota za nadgodziny: {ot_amount:.2f} PLN"), ln=True)
         pdf.ln(2)
         
@@ -107,7 +107,7 @@ def generate_pdf_slips(calc_df, period, indicator, ot_df, pallet_df, pt_df, spec
         pdf.set_font("Arial", 'B', 11)
         pdf.cell(200, 6, txt=remove_pl_chars("4. Obsługa paleciaka:"), ln=True)
         pdf.set_font("Arial", '', 10)
-        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Liczba godzin: {pt_hours:.2f} h"), ln=True)
+        pdf.cell(200, 5, txt=remove_pl_chars(f"   - Liczba godzin: {pt_hours:.1f} h"), ln=True)
         pdf.cell(200, 5, txt=remove_pl_chars(f"   - Kwota: {pt_amount:.2f} PLN"), ln=True)
         pdf.ln(2)
         
@@ -537,7 +537,7 @@ with tab_calc:
 
         st.markdown("---")
         st.subheader("⏱️ Zestawienie Nadgodzin Pracowników (Dzień po Dniu)")
-        st.caption("Tabela przedstawia liczbę nadgodzin zarejestrowanych dla każdego pracownika w poszczególnych dniach miesiąca wraz z wyliczoną kwotą.")
+        st.caption("Tabela przedstawia liczbę nadgodzin zarejestrowanych dla każdego pracownika w poszczególnych dniach miesiąca wraz z wyliczoną kwotą (wszystkie godziny zaokrąglone do 1 miejsca po przecinku).")
         
         overtime_pivot = pd.DataFrame()
         if not df_sched.empty and "NADGODZINY (godz.)" in df_sched.columns:
@@ -550,7 +550,11 @@ with tab_calc:
             
             date_cols = [c for c in overtime_pivot.columns if c not in ["OSOBA", "STANOWISKO"]]
             
-            overtime_pivot["Suma Nadgodzin (h)"] = overtime_pivot[date_cols].sum(axis=1)
+            # Wymuszenie zaokrąglenia do 1 miejsca po przecinku dla wszystkich kolumn z dniami
+            for col in date_cols:
+                overtime_pivot[col] = pd.to_numeric(overtime_pivot[col], errors='coerce').fillna(0.0).round(1)
+            
+            overtime_pivot["Suma Nadgodzin (h)"] = overtime_pivot[date_cols].sum(axis=1).round(1)
             
             def get_ot_rate(pos):
                 p = str(pos).strip().upper()
@@ -566,10 +570,12 @@ with tab_calc:
             cols_order = ["OSOBA", "STANOWISKO", "Suma Nadgodzin (h)", "Kwota za nadgodziny (PLN)"] + date_cols
             overtime_pivot = overtime_pivot[cols_order]
             
-            st.dataframe(overtime_pivot.style.format({
-                "Suma Nadgodzin (h)": "{:.2f} h",
-                "Kwota za nadgodziny (PLN)": "{:.2f} zł"
-            }), use_container_width=True)
+            # Słownik formatowania dla tabeli (1 miejsce po przecinku dla godzin)
+            format_dict = {col: "{:.1f} h" for col in date_cols}
+            format_dict["Suma Nadgodzin (h)"] = "{:.1f} h"
+            format_dict["Kwota za nadgodziny (PLN)"] = "{:.2f} zł"
+            
+            st.dataframe(overtime_pivot.style.format(format_dict), use_container_width=True)
             
             buffer_ot = io.BytesIO()
             with pd.ExcelWriter(buffer_ot, engine='openpyxl') as writer:
@@ -657,7 +663,7 @@ with tab_calc:
             column_config={
                 "Ilość godzin": st.column_config.NumberColumn(
                     "Ilość godzin",
-                    format="%.2f h",
+                    format="%.1f h",
                     min_value=0.0,
                     step=0.5,
                     help="Wpisz liczbę przepracowanych godzin"
