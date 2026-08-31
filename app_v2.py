@@ -533,23 +533,25 @@ with tab_calc:
             st.session_state.pallet_employees_df = calc_df[["Pracownik", "Stanowisko"]].copy()
             st.session_state.pallet_table_period = period_key
 
+        num_workers_pallets = len(st.session_state.pallet_employees_df)
+        share_per_worker_pallet = (total_pallet_amount / num_workers_pallets) if num_workers_pallets > 0 and total_pallet_amount > 0 else 0.0
+
+        st.session_state.pallet_employees_df["Kwota za załadunki (PLN)"] = share_per_worker_pallet
+
         edited_pallet_df = st.data_editor(
             st.session_state.pallet_employees_df,
             num_rows="delete",
             use_container_width=True,
+            column_config={
+                "Kwota za załadunki (PLN)": st.column_config.NumberColumn(
+                    "Kwota za załadunki (PLN)",
+                    format="%.2f zł",
+                    disabled=True
+                )
+            },
             key="editor_pallets_workers"
         )
         st.session_state.pallet_employees_df = edited_pallet_df
-
-        num_workers_pallets = len(edited_pallet_df)
-        share_per_worker_pallet = (total_pallet_amount / num_workers_pallets) if num_workers_pallets > 0 and total_pallet_amount > 0 else 0.0
-
-        edited_pallet_df["Kwota za załadunki (PLN)"] = share_per_worker_pallet
-
-        st.subheader("Rozliczenie załadunków/rozładunków na pracowników")
-        st.dataframe(edited_pallet_df.style.format({
-            "Kwota za załadunki (PLN)": "{:.2f} zł"
-        }), use_container_width=True)
 
         st.markdown("---")
         st.subheader("🚜 Obsługa paleciaka")
@@ -563,6 +565,16 @@ with tab_calc:
             st.session_state.pallet_truck_employees_df = initial_pt_data
             st.session_state.pallet_truck_period = period_key
 
+        total_pt_hours = st.session_state.pallet_truck_employees_df["Ilość godzin"].sum()
+        total_pt_pool = st.session_state.pallet_pool
+
+        def calc_pt_amount(row):
+            if total_pt_hours > 0:
+                return (row["Ilość godzin"] / total_pt_hours) * total_pt_pool
+            return 0.0
+
+        st.session_state.pallet_truck_employees_df["Kwota (PLN)"] = st.session_state.pallet_truck_employees_df.apply(calc_pt_amount, axis=1)
+
         edited_pt_df = st.data_editor(
             st.session_state.pallet_truck_employees_df,
             num_rows="delete",
@@ -572,29 +584,19 @@ with tab_calc:
                     "Ilość godzin",
                     min_value=0.0,
                     step=1.0,
-                    format="%.1f"
+                    format="%.1f h"
+                ),
+                "Kwota (PLN)": st.column_config.NumberColumn(
+                    "Kwota (PLN)",
+                    format="%.2f zł",
+                    disabled=True
                 )
             },
             key="editor_pallet_truck_workers"
         )
         st.session_state.pallet_truck_employees_df = edited_pt_df
 
-        total_pt_hours = edited_pt_df["Ilość godzin"].sum()
-        total_pt_pool = st.session_state.pallet_pool
-
-        def calc_pt_amount(row):
-            if total_pt_hours > 0:
-                return (row["Ilość godzin"] / total_pt_hours) * total_pt_pool
-            return 0.0
-
-        edited_pt_df["Kwota (PLN)"] = edited_pt_df.apply(calc_pt_amount, axis=1)
-
-        st.markdown(f"**Suma godzin wszystkich pracowników:** {total_pt_hours:.1f} h")
-        st.subheader("Rozliczenie obsługi paleciaka na pracowników")
-        st.dataframe(edited_pt_df.style.format({
-            "Ilość godzin": "{:.1f} h",
-            "Kwota (PLN)": "{:.2f} zł"
-        }), use_container_width=True)
+        st.markdown(f"**Suma godzin wszystkich pracowników:** {st.session_state.pallet_truck_employees_df['Ilość godzin'].sum():.1f} h")
 
         st.markdown("---")
         colA, colB = st.columns(2)
