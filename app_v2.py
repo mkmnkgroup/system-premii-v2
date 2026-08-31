@@ -149,7 +149,7 @@ if 'employees_df' not in st.session_state:
     st.session_state.employees_df = pd.DataFrame(DEFAULT_EMPLOYEES)
 
 # ==========================================
-# FRAGMENT EDYTORWY
+# FRAGMENT EDYTORYCZNY
 # ==========================================
 @st.fragment
 def schedule_editor_fragment():
@@ -194,6 +194,31 @@ def schedule_editor_fragment():
                 use_container_width=True
             )
 
+        # Funkcja obsługująca natychmiastową zmianę stanu w locie bez konieczności naciskania Enter
+        def on_editor_change():
+            if "schedule_editor" in st.session_state:
+                edited_data = st.session_state["schedule_editor"]
+                if isinstance(edited_data, dict):
+                    # Obsługa struktury zmian ze Streamlit data_editor
+                    edited_df = st.session_state.current_schedule_df.copy()
+                    
+                    # Aktualizacja zmodyfikowanych wierszy/komórek z edytora
+                    if "edited_rows" in edited_data:
+                        for row_idx, changes in edited_data["edited_rows"].items():
+                            for col_name, new_val in changes.items():
+                                edited_df.at[int(row_idx), col_name] = new_val
+                    
+                    # Zastosowanie reguł dla nieobecności i dni wolnych
+                    mask_absent = edited_df["NIEOBECNOŚĆ"] != "Brak"
+                    edited_df.loc[mask_absent, "GODZINA ROZPOCZĘCIA"] = "NIEOBECNY"
+                    edited_df.loc[mask_absent, "GODZINA ZAKOŃCZENIA"] = "NIEOBECNY"
+
+                    mask_free = edited_df["DZIEŃ PRACUJĄCY/WOLNY"].isin(["Wolny", "Święto"]) | (edited_df["CZAS ZMIANY"].astype(str).str.lower() == "wolne")
+                    edited_df.loc[mask_free, "GODZINA ROZPOCZĘCIA"] = "Wolne"
+                    edited_df.loc[mask_free, "GODZINA ZAKOŃCZENIA"] = "Wolne"
+
+                    st.session_state.current_schedule_df = edited_df
+
         edited_df = st.data_editor(
             st.session_state.current_schedule_df,
             column_config={
@@ -206,41 +231,21 @@ def schedule_editor_fragment():
             },
             use_container_width=True,
             num_rows="fixed",
-            key="schedule_editor"
+            key="schedule_editor",
+            on_change=on_editor_change
         )
 
-        mask_absent = edited_df["NIEOBECNOŚĆ"] != "Brak"
-        edited_df.loc[mask_absent, "GODZINA ROZPOCZĘCIA"] = "NIEOBECNY"
-        edited_df.loc[mask_absent, "GODZINA ZAKOŃCZENIA"] = "NIEOBECNY"
+        # Bezpieczne przepisanie ostatecznego stanu
+        if isinstance(edited_df, pd.DataFrame):
+            mask_absent = edited_df["NIEOBECNOŚĆ"] != "Brak"
+            edited_df.loc[mask_absent, "GODZINA ROZPOCZĘCIA"] = "NIEOBECNY"
+            edited_df.loc[mask_absent, "GODZINA ZAKOŃCZENIA"] = "NIEOBECNY"
 
-        mask_free = edited_df["DZIEŃ PRACUJĄCY/WOLNY"].isin(["Wolny", "Święto"]) | (edited_df["CZAS ZMIANY"].astype(str).str.lower() == "wolne")
-        edited_df.loc[mask_free, "GODZINA ROZPOCZĘCIA"] = "Wolne"
-        edited_df.loc[mask_free, "GODZINA ZAKOŃCZENIA"] = "Wolne"
+            mask_free = edited_df["DZIEŃ PRACUJĄCY/WOLNY"].isin(["Wolny", "Święto"]) | (edited_df["CZAS ZMIANY"].astype(str).str.lower() == "wolne")
+            edited_df.loc[mask_free, "GODZINA ROZPOCZĘCIA"] = "Wolne"
+            edited_df.loc[mask_free, "GODZINA ZAKOŃCZENIA"] = "Wolne"
 
-        def restore_start(row):
-            if row["NIEOBECNOŚĆ"] == "Brak" and row["GODZINA ROZPOCZĘCIA"] == "NIEOBECNY":
-                if row["DZIEŃ PRACUJĄCY/WOLNY"] in ["Wolny", "Święto"] or str(row["CZAS ZMIANY"]).strip().lower() == "wolne":
-                    return "Wolne"
-                val_str = str(row["CZAS ZMIANY"]).strip()
-                if "-" in val_str and val_str.lower() != "wolne":
-                    return val_str.split("-")[0].strip()
-                return ""
-            return row["GODZINA ROZPOCZĘCIA"]
-
-        def restore_end(row):
-            if row["NIEOBECNOŚĆ"] == "Brak" and row["GODZINA ZAKOŃCZENIA"] == "NIEOBECNY":
-                if row["DZIEŃ PRACUJĄCY/WOLNY"] in ["Wolny", "Święto"] or str(row["CZAS ZMIANY"]).strip().lower() == "wolne":
-                    return "Wolne"
-                val_str = str(row["CZAS ZMIANY"]).strip()
-                if "-" in val_str and val_str.lower() != "wolne":
-                    return val_str.split("-")[1].strip()
-                return ""
-            return row["GODZINA ZAKOŃCZENIA"]
-
-        edited_df["GODZINA ROZPOCZĘCIA"] = edited_df.apply(restore_start, axis=1)
-        edited_df["GODZINA ZAKOŃCZENIA"] = edited_df.apply(restore_end, axis=1)
-
-        st.session_state.current_schedule_df = edited_df
+            st.session_state.current_schedule_df = edited_df
 
         st.markdown("---")
         st.subheader("👁️ Podgląd harmonogramu z zaznaczonymi dniami wolnymi")
