@@ -1,11 +1,4 @@
 streamlit
-pandas
-openpyxl
-xlrd
-plotly
-fpdf
-holidays
-Plaintext
 google-generativeai
 pandas
 openpyxl
