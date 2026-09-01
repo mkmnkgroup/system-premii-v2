@@ -78,256 +78,6 @@ def remove_pl_chars(text):
   return text
 
 
-def generate_pdf_slips(
-    calc_df,
-    period,
-    indicator,
-    ot_df,
-    pallet_df,
-    pt_df,
-    special_df,
-    base_salary,
-    bonus_rate,
-    comparison_data=None,
-):
-  pdf = FPDF()
-  for idx, row in calc_df.iterrows():
-    emp_name = row["Pracownik"]
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 14)
-    pdf.cell(
-        200,
-        8,
-        txt=remove_pl_chars(f"PASEK PREMIOWY v2 - {period}"),
-        ln=True,
-        align="C",
-    )
-    pdf.ln(2)
-
-    pdf.set_font("Arial", "", 11)
-    pdf.cell(200, 6, txt=remove_pl_chars(f"Pracownik: {emp_name}"), ln=True)
-    pdf.cell(200, 6, txt=remove_pl_chars(f"Stanowisko: {row['Stanowisko']}"), ln=True)
-    pdf.ln(2)
-    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-    pdf.ln(3)
-
-    # 1. Premia Główna
-    pdf.set_font("Arial", "B", 11)
-    pdf.cell(
-        200,
-        6,
-        txt=remove_pl_chars("1. Premia Główna (Szczegóły wyliczenia):"),
-        ln=True,
-    )
-    pdf.set_font("Arial", "", 9)
-    pdf.cell(
-        200,
-        5,
-        txt=remove_pl_chars(
-            f"   - Podstawa do wyliczenia premii: {base_salary:,.2f} zł netto"
-            .replace(",", " ")
-            .replace(".", ",")
-        ),
-        ln=True,
-    )
-    pdf.cell(
-        200,
-        5,
-        txt=remove_pl_chars(
-            f"   - Wskaźnik Wykonania Działu: {indicator*100:.2f}%"
-        ),
-        ln=True,
-    )
-    pdf.cell(
-        200,
-        5,
-        txt=remove_pl_chars(
-            f"   - Stawka Premii (proporcjonalna): {bonus_rate*100:.2f}%"
-        ),
-        ln=True,
-    )
-
-    if comparison_data:
-      pdf.cell(
-          200,
-          5,
-          txt=remove_pl_chars(
-              "   - Porównanie wyników miesiąca vs średnia roczna:"
-          ),
-          ln=True,
-      )
-      for item in comparison_data:
-        line_str = (
-            f"     * {item['Parametr produkcyjny']}: Miesiąc:"
-            f" {item['Wartość w miesiącu']} | Baza:"
-            f" {item['Średnia roczna (baza)']} | Odchylenie:"
-            f" {item['Odchylenie procentowe (%)']} (Waga:"
-            f" {item['Waga wskaźnika']})"
-        )
-        pdf.cell(200, 5, txt=remove_pl_chars(line_str), ln=True)
-
-    pdf.cell(
-        200,
-        5,
-        txt=remove_pl_chars(
-            f"   - Liczba nieobecności: {row['Liczba nieobecności']} | Potrącenia:"
-            " BRAK (0%)"
-        ),
-        ln=True,
-    )
-    main_bonus = row["Premia netto (PLN)"]
-    pdf.set_font("Arial", "B", 10)
-    pdf.cell(
-        200,
-        5,
-        txt=remove_pl_chars(f"   - Kwota premii głównej: {main_bonus:.2f} PLN"),
-        ln=True,
-    )
-    pdf.ln(2)
-
-    # 2. Nadgodziny
-    ot_row = (
-        ot_df[ot_df["OSOBA"] == emp_name]
-        if not ot_df.empty and "OSOBA" in ot_df.columns
-        else pd.DataFrame()
-    )
-    ot_hours = (
-        ot_row["Suma Nadgodzin (h)"].values[0]
-        if not ot_row.empty and "Suma Nadgodzin (h)" in ot_row.columns
-        else 0.0
-    )
-    ot_amount = (
-        ot_row["Kwota za nadgodziny (PLN)"].values[0]
-        if not ot_row.empty and "Kwota za nadgodziny (PLN)" in ot_row.columns
-        else 0.0
-    )
-
-    pdf.set_font("Arial", "B", 11)
-    pdf.cell(200, 6, txt=remove_pl_chars("2. Nadgodziny:"), ln=True)
-    pdf.set_font("Arial", "", 10)
-    pdf.cell(200, 5, txt=remove_pl_chars(f"   - Liczba godzin: {ot_hours:.1f} h"), ln=True)
-    pdf.cell(
-        200,
-        5,
-        txt=remove_pl_chars(f"   - Kwota za nadgodziny: {ot_amount:.2f} PLN"),
-        ln=True,
-    )
-    pdf.ln(2)
-
-    # 3. Załadunki / Rozładunki
-    pallet_row = (
-        pallet_df[pallet_df["Pracownik"] == emp_name]
-        if not pallet_df.empty and "Pracownik" in pallet_df.columns
-        else pd.DataFrame()
-    )
-    pallet_amount = (
-        pallet_row["Kwota za załadunki (PLN)"].values[0]
-        if not pallet_row.empty and "Kwota za załadunki (PLN)" in pallet_row.columns
-        else 0.0
-    )
-
-    pdf.set_font("Arial", "B", 11)
-    pdf.cell(200, 6, txt=remove_pl_chars("3. Załadunki / Rozładunki:"), ln=True)
-    pdf.set_font("Arial", "", 10)
-    pdf.cell(200, 5, txt=remove_pl_chars(f"   - Kwota: {pallet_amount:.2f} PLN"), ln=True)
-    pdf.ln(2)
-
-    # 4. Obsługa paleciaka
-    pt_row = (
-        pt_df[pt_df["Pracownik"] == emp_name]
-        if not pt_df.empty and "Pracownik" in pt_df.columns
-        else pd.DataFrame()
-    )
-    pt_hours = (
-        pt_row["Ilość godzin"].values[0]
-        if not pt_row.empty and "Ilość godzin" in pt_row.columns
-        else 0.0
-    )
-    pt_amount = (
-        pt_row["Kwota (PLN)"].values[0]
-        if not pt_row.empty and "Kwota (PLN)" in pt_row.columns
-        else 0.0
-    )
-
-    pdf.set_font("Arial", "B", 11)
-    pdf.cell(200, 6, txt=remove_pl_chars("4. Obsługa paleciaka:"), ln=True)
-    pdf.set_font("Arial", "", 10)
-    pdf.cell(200, 5, txt=remove_pl_chars(f"   - Liczba godzin: {pt_hours:.1f} h"), ln=True)
-    pdf.cell(200, 5, txt=remove_pl_chars(f"   - Kwota: {pt_amount:.2f} PLN"), ln=True)
-    pdf.ln(2)
-
-    # 5. Premia specjalna
-    pdf.set_font("Arial", "B", 11)
-    pdf.cell(200, 6, txt=remove_pl_chars("5. Premia specjalna:"), ln=True)
-    pdf.set_font("Arial", "", 10)
-    special_sum = 0.0
-    if not special_df.empty:
-      emp_specials = special_df[
-          special_df["Pracownik"]
-          .astype(str)
-          .str.strip()
-          .str.upper()
-          == str(emp_name).strip().upper()
-      ]
-      if not emp_specials.empty:
-        for _, s_row in emp_specials.iterrows():
-          s_amount = float(s_row.get("Kwota netto premii", 0.0) or 0.0)
-          s_who = s_row.get("Kto przyznał", "-")
-          s_reason = s_row.get("Powód przyznania premii", "-")
-          special_sum += s_amount
-          pdf.cell(
-              200,
-              5,
-              txt=remove_pl_chars(
-                  f"   - Kwota: {s_amount:.2f} PLN | Przyznał: {s_who} | Powód:"
-                  f" {s_reason}"
-              ),
-              ln=True,
-          )
-      else:
-        pdf.cell(
-            200, 5, txt=remove_pl_chars("   - Brak premii specjalnych"), ln=True
-        )
-    else:
-      pdf.cell(
-          200, 5, txt=remove_pl_chars("   - Brak premii specjalnych"), ln=True
-      )
-    pdf.ln(3)
-
-    total_net = (
-        main_bonus + ot_amount + pallet_amount + pt_amount + special_sum
-    )
-
-    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-    pdf.ln(3)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(
-        200,
-        7,
-        txt=remove_pl_chars(f"RAZEM DO WYPŁATY (NETTO): {total_net:.2f} PLN"),
-        ln=True,
-    )
-
-    pdf.ln(6)
-    pdf.set_font("Arial", "I", 8)
-    pdf.cell(
-        200,
-        5,
-        txt=remove_pl_chars(
-            "Wygenerowano z Systemu Rozliczania Harmonogramów v2. Dokument"
-            " wewnętrzny."
-        ),
-        ln=True,
-    )
-
-  with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-    pdf.output(tmp.name)
-    with open(tmp.name, "rb") as f:
-      data = f.read()
-  os.remove(tmp.name)
-  return data
-
-
 def get_col_sum_flexible(df, possible_names):
   if df.empty:
     return 0.0
@@ -483,7 +233,7 @@ if "pallet_pool" not in st.session_state:
 
 
 # ==========================================
-# FRAGMENT EDYTORYCZNY Z IMPORTEM NIEBECNOŚCI
+# FRAGMENT EDYTORYCZNY Z IMPORTEM NIEBECNOŚCI I AUTO-UZUPEŁNIANIEM
 # ==========================================
 @st.fragment
 def schedule_editor_fragment():
@@ -565,40 +315,65 @@ def schedule_editor_fragment():
     col_btn1, col_btn2, _ = st.columns([1, 1, 2])
     with col_btn1:
       if st.button("⏱️ Uzupełnij godziny pracy", use_container_width=True):
+        df_temp = st.session_state.current_schedule_df.copy()
 
-        def fill_start(row):
-          if row["NIEOBECNOŚĆ"] not in ["Brak", ""]:
-            return "NIEOBECNY"
-          if row["DZIEŃ PRACUJĄCY/WOLNY"] in ["Wolny", "Święto"] or (
-              str(row["CZAS ZMIANY"]).strip().lower() == "wolne"
-          ):
-            return "Wolne"
-          val_str = str(row["CZAS ZMIANY"]).strip()
-          if "-" in val_str and val_str.lower() != "wolne":
-            return val_str.split("-")[0].strip()
-          return ""
+        # 1. Nanieś importowane nieobecności
+        if (
+            not st.session_state.imported_absences_df.empty
+            and "Pracownik" in st.session_state.imported_absences_df.columns
+        ):
+          abs_lookup = {}
+          for (
+              _,
+              abs_row,
+          ) in st.session_state.imported_absences_df.iterrows():
+            emp_k = str(abs_row["Pracownik"]).strip().upper()
+            try:
+              day_k = int(abs_row["Dzień"])
+            except:
+              continue
+            abs_lookup[(emp_k, day_k)] = abs_row["Opis"]
 
-        def fill_end(row):
-          if row["NIEOBECNOŚĆ"] not in ["Brak", ""]:
-            return "NIEOBECNY"
-          if row["DZIEŃ PRACUJĄCY/WOLNY"] in ["Wolny", "Święto"] or (
-              str(row["CZAS ZMIANY"]).strip().lower() == "wolne"
-          ):
-            return "Wolne"
-          val_str = str(row["CZAS ZMIANY"]).strip()
-          if "-" in val_str and val_str.lower() != "wolne":
-            return val_str.split("-")[1].strip()
-          return ""
+          def apply_absences(row):
+            try:
+              day_num = int(str(row["DATA"]).split(".")[0])
+            except:
+              day_num = None
+            emp_k = str(row["OSOBA"]).strip().upper()
 
-        st.session_state.current_schedule_df["GODZINA ROZPOCZĘCIA"] = (
-            st.session_state.current_schedule_df.apply(fill_start, axis=1)
-        )
-        st.session_state.current_schedule_df["GODZINA ZAKOŃCZENIA"] = (
-            st.session_state.current_schedule_df.apply(fill_end, axis=1)
-        )
+            if (emp_k, day_num) in abs_lookup:
+              return abs_lookup[(emp_k, day_num)]
+            return row.get("NIEOBECNOŚĆ", "Brak")
+
+          df_temp["NIEOBECNOŚĆ"] = df_temp.apply(apply_absences, axis=1)
+
+        # 2. Uzupełnij godziny pracy w zależności od nieobecności i dni wolnych
+        def fill_hours(row):
+          absence = str(row.get("NIEOBECNOŚĆ", "Brak")).strip()
+          status = str(row.get("DZIEŃ PRACUJĄCY/WOLNY", "")).strip()
+          shift_time = str(row.get("CZAS ZMIANY", "")).strip()
+
+          if absence not in ["Brak", "", "None", "nan"]:
+            return "NIEOBECNY", "NIEOBECNY"
+
+          if status in ["Wolny", "Święto"] or shift_time.lower() == "wolne":
+            return "Wolne", "Wolne"
+
+          if "-" in shift_time:
+            parts = shift_time.split("-")
+            return parts[0].strip(), parts[1].strip()
+
+          return "", ""
+
+        hours_res = df_temp.apply(fill_hours, axis=1)
+        df_temp["GODZINA ROZPOCZĘCIA"] = [h[0] for h in hours_res]
+        df_temp["GODZINA ZAKOŃCZENIA"] = [h[1] for h in hours_res]
+
+        st.session_state.current_schedule_df = df_temp
         st.success(
-            "Automatycznie uzupełniono godziny pracy oraz nieobecności!"
+            "Pomyślnie naniesiono nieobecności oraz uzupełniono godziny pracy!"
         )
+        st.rerun()
 
     with col_btn2:
       buffer = io.BytesIO()
@@ -1196,7 +971,7 @@ with tab_comp:
     )
 
 # ==========================================
-# ZAKŁADKA 6: PEŁNE USTAWIENIA SYSTEMU (PRZYWRÓCONE W CAŁOŚCI)
+# ZAKŁADKA 6: USTAWIENIA SYSTEMU
 # ==========================================
 with tab_settings:
   st.header("⚙️ Pełna Konfiguracja Systemu i Parametrów")
@@ -1217,10 +992,6 @@ with tab_settings:
   # Sub-tab 1: Oznaczenia Nieobecności
   with sub_t1:
     st.subheader("Słownik Oznaczeń Nieobecności")
-    st.caption(
-        "Zarządzaj kodami nieobecności importowanymi z plików Excel i stosowanymi"
-        " w edytorze."
-    )
     edited_codes = st.data_editor(
         st.session_state.absence_codes_df,
         num_rows="dynamic",
@@ -1234,10 +1005,6 @@ with tab_settings:
   # Sub-tab 2: Skład Osobowy
   with sub_t2:
     st.subheader("Lista Pracowników i Przypisanie do Grup")
-    st.caption(
-        "Możesz dodawać nowych pracowników, zmieniać ich stanowiska, grupy oraz"
-        " systemy pracy."
-    )
     edited_emp = st.data_editor(
         st.session_state.employees_df,
         num_rows="dynamic",
@@ -1251,9 +1018,6 @@ with tab_settings:
   # Sub-tab 3: Grafik Grup
   with sub_t3:
     st.subheader("Definicje Zmian i Czasu Pracy Grup")
-    st.caption(
-        "Ustaw domyślne godziny pracy dla poszczególnych grup zawodowych."
-    )
     edited_groups = st.data_editor(
         st.session_state.groups_df,
         num_rows="dynamic",
@@ -1344,9 +1108,15 @@ with tab_settings:
           step=0.1,
       )
 
-      total_w = st.session_state.w_pcs + st.session_state.w_lines + st.session_state.w_weight
+      total_w = (
+          st.session_state.w_pcs
+          + st.session_state.w_lines
+          + st.session_state.w_weight
+      )
       if round(total_w, 2) != 100.0:
-        st.warning(f"⚠️ Suma wag wynosi obecnie **{total_w:.2f}%** (zalecane: 100%).")
+        st.warning(
+            f"⚠️ Suma wag wynosi obecnie **{total_w:.2f}%** (zalecane: 100%)."
+        )
       else:
         st.success("Suma wag wynosi dokładnie 100%.")
 
@@ -1356,10 +1126,6 @@ with tab_settings:
   # Sub-tab 6: Premie Specjalne
   with sub_t6:
     st.subheader("Zarządzanie Premiami Specjalnymi")
-    st.caption(
-        "Dodawaj indywidualne premie uznaniowe przyznawane pracownikom w"
-        " danym miesiącu."
-    )
     edited_specials = st.data_editor(
         st.session_state.special_bonuses_df,
         num_rows="dynamic",
