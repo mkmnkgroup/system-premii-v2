@@ -111,7 +111,7 @@ def generate_pdf_slips(
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(3)
 
-    # 1. Premia Główna ze szczegółami wyliczenia
+    # 1. Premia Główna
     pdf.set_font("Arial", "B", 11)
     pdf.cell(
         200,
@@ -454,7 +454,7 @@ if "special_bonuses_df" not in st.session_state:
 if "imported_absences_df" not in st.session_state:
   st.session_state.imported_absences_df = pd.DataFrame()
 
-# Inicjalizacja stanów konfiguracyjnych w session_state
+# Inicjalizacja stanów konfiguracyjnych
 if "base_bonus_salary" not in st.session_state:
   st.session_state.base_bonus_salary = 4300.0
 if "avg_lines_12m" not in st.session_state:
@@ -500,7 +500,6 @@ def schedule_editor_fragment():
         st.success("Plik nieobecności wczytany pomyślnie!")
         if st.button("Przetwarzaj i zaimportuj nieobecności do pamięci"):
           imported_records = []
-          # Mapowanie słownika oznaczeń na rodzaje nieobecności
           abs_map = {}
           for _, row in st.session_state.absence_codes_df.iterrows():
             code = str(row["Oznaczenie"]).strip().upper()
@@ -691,7 +690,7 @@ tab_gen, tab_calc, tab_dash, tab_history, tab_comp, tab_settings = st.tabs([
     "📊 Dashboard i Wykresy",
     "📁 Archiwum Historyczne",
     "📈 Porównanie Wyników",
-    "⚙️ Ustawienia",
+    "⚙️ Ustawienia Systemu",
 ])
 
 PL_DAYS = {
@@ -870,7 +869,7 @@ with tab_gen:
           elif day_name == "sobota":
             czas_zmiany = "08:00-16:00"
 
-        # Sprawdzenie czy zaimportowano nieobecność dla tego pracownika i dnia
+        # Nieobecność z pliku
         default_absence = "Brak"
         if (
             not st.session_state.imported_absences_df.empty
@@ -889,7 +888,6 @@ with tab_gen:
           ]
           if not match_abs.empty:
             code_found = match_abs.iloc[0]["Oznaczenie"]
-            # Znajdź odpowiadający rodzaj nieobecności
             code_row = st.session_state.absence_codes_df[
                 st.session_state.absence_codes_df["Oznaczenie"]
                 .astype(str)
@@ -915,10 +913,7 @@ with tab_gen:
         })
 
     st.session_state.current_schedule_df = pd.DataFrame(schedule_rows)
-    st.success(
-        f"Wygenerowano harmonogram v2 na {period_key} z uwzględnieniem"
-        " zaimportowanych nieobecności!"
-    )
+    st.success(f"Wygenerowano harmonogram v2 na {period_key}!")
 
   schedule_editor_fragment()
 
@@ -950,7 +945,6 @@ with tab_calc:
       )
 
     df_sched = st.session_state.current_schedule_df
-
     cur_pcs, cur_lines, cur_weight = 0.0, 0.0, 0.0
 
     if not prod_df.empty:
@@ -998,12 +992,6 @@ with tab_calc:
 
     st.markdown("---")
     st.subheader("📌 Wyniki Bieżącego Miesiąca vs Średnia Roczna")
-    st.caption(
-        "Poniższa tabela przedstawia zestawienie ilościowe oraz procentowe"
-        " odchylenie od 12-miesięcznej bazy dla poszczególnych wskaźników"
-        " produkcyjnych."
-    )
-
     comparison_data = [
         {
             "Parametr produkcyjny": "Pozycje",
@@ -1100,11 +1088,6 @@ with tab_calc:
 
     st.markdown("---")
     st.subheader("⏱️ Zestawienie Nadgodzin Pracowników (Dzień po Dniu)")
-    st.caption(
-        "Tabela przedstawia liczbę nadgodzin zarejestrowanych dla każdego"
-        " pracownika w poszczególnych dniach miesiąca wraz z wyliczoną kwotą"
-        " (wszystkie godziny zaokrąglone do 1 miejsca po przecinku)."
-    )
 
     overtime_pivot = pd.DataFrame()
     if not df_sched.empty and "NADGODZINY (godz.)" in df_sched.columns:
@@ -1118,7 +1101,6 @@ with tab_calc:
       date_cols = [
           c for c in overtime_pivot.columns if c not in ["OSOBA", "STANOWISKO"]
       ]
-
       for col in date_cols:
         overtime_pivot[col] = (
             pd.to_numeric(overtime_pivot[col], errors="coerce")
@@ -1205,9 +1187,6 @@ with tab_history:
 # ==========================================
 with tab_comp:
   st.header("📈 Porównanie Wyników Miesięcznych")
-  st.caption(
-      "Moduł porównawczy wskaźników produkcyjnych i finansowych w czasie."
-  )
   if st.session_state.history_v2:
     hist_keys = list(st.session_state.history_v2.keys())
     st.write(f"Dostępne okresy w archiwum: {', '.join(hist_keys)}")
@@ -1217,63 +1196,176 @@ with tab_comp:
     )
 
 # ==========================================
-# ZAKŁADKA 6: USTAWIENIA
+# ZAKŁADKA 6: PEŁNE USTAWIENIA SYSTEMU (PRZYWRÓCONE W CAŁOŚCI)
 # ==========================================
 with tab_settings:
-  st.header("⚙️ Ustawienia Systemu v2")
-
-  st.subheader("1. Edycja Słownika Oznaczeń Nieobecności")
-  st.markdown(
-      "Tutaj możesz zarządzać symbolami i opisami nieobecności używanymi w"
-      " systemie oraz przy imporcie."
+  st.header("⚙️ Pełna Konfiguracja Systemu i Parametrów")
+  st.caption(
+      "W tym miejscu możesz dostosować wszystkie moduły, stawki, składy"
+      " osobowe oraz definicje używane w całym systemie."
   )
-  edited_codes = st.data_editor(
-      st.session_state.absence_codes_df, num_rows="dynamic", key="codes_config"
-  )
-  if st.button("Zapisz ustawienia oznaczeń"):
-    st.session_state.absence_codes_df = edited_codes
-    st.success("Zaktualizowano słownik oznaczeń nieobecności!")
 
-  st.markdown("---")
-  st.subheader("2. Parametry Bazowe i Finansowe")
-  col_s1, col_s2 = st.columns(2)
-  with col_s1:
-    st.session_state.base_bonus_salary = st.number_input(
-        "Podstawa do wyliczenia premii (zł netto):",
-        value=float(st.session_state.base_bonus_salary),
-        step=100.0,
-    )
-    st.session_state.avg_pcs_12m = st.number_input(
-        "Średnia roczna - Sztuki:",
-        value=float(st.session_state.avg_pcs_12m),
-        step=100.0,
-    )
-    st.session_state.avg_lines_12m = st.number_input(
-        "Średnia roczna - Pozycje:",
-        value=float(st.session_state.avg_lines_12m),
-        step=100.0,
-    )
-    st.session_state.avg_weight_12m = st.number_input(
-        "Średnia roczna - Waga (kg):",
-        value=float(st.session_state.avg_weight_12m),
-        step=100.0,
-    )
-  with col_s2:
-    st.session_state.w_pcs = st.number_input(
-        "Waga wskaźnika Sztuki (%):",
-        value=float(st.session_state.w_pcs),
-        step=0.1,
-    )
-    st.session_state.w_lines = st.number_input(
-        "Waga wskaźnika Pozycje (%):",
-        value=float(st.session_state.w_lines),
-        step=0.1,
-    )
-    st.session_state.w_weight = st.number_input(
-        "Waga wskaźnika Waga (%):",
-        value=float(st.session_state.w_weight),
-        step=0.1,
-    )
+  sub_t1, sub_t2, sub_t3, sub_t4, sub_t5, sub_t6 = st.tabs([
+      "🔤 Oznaczenia Nieobecności",
+      "👥 Skład Osobowy i Systemy",
+      "🕒 Grafik i Zmiany Grup",
+      "💰 Stawki Nadgodzin i Palety",
+      "🎯 Parametry Premii i Wagi",
+      "🎁 Premie Specjalne",
+  ])
 
-  if st.button("Zapisz konfigurację parametrów"):
-    st.success("Konfiguracja została zapisana pomyślnie!")
+  # Sub-tab 1: Oznaczenia Nieobecności
+  with sub_t1:
+    st.subheader("Słownik Oznaczeń Nieobecności")
+    st.caption(
+        "Zarządzaj kodami nieobecności importowanymi z plików Excel i stosowanymi"
+        " w edytorze."
+    )
+    edited_codes = st.data_editor(
+        st.session_state.absence_codes_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="set_absence_editor",
+    )
+    if st.button("💾 Zapisz Słownik Nieobecności", key="btn_save_codes"):
+      st.session_state.absence_codes_df = edited_codes
+      st.success("Zapisano nowy słownik oznaczeń nieobecności!")
+
+  # Sub-tab 2: Skład Osobowy
+  with sub_t2:
+    st.subheader("Lista Pracowników i Przypisanie do Grup")
+    st.caption(
+        "Możesz dodawać nowych pracowników, zmieniać ich stanowiska, grupy oraz"
+        " systemy pracy."
+    )
+    edited_emp = st.data_editor(
+        st.session_state.employees_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="set_emp_editor",
+    )
+    if st.button("💾 Zapisz Skład Osobowy", key="btn_save_emp"):
+      st.session_state.employees_df = edited_emp
+      st.success("Lista pracowników została pomyślnie zaktualizowana!")
+
+  # Sub-tab 3: Grafik Grup
+  with sub_t3:
+    st.subheader("Definicje Zmian i Czasu Pracy Grup")
+    st.caption(
+        "Ustaw domyślne godziny pracy dla poszczególnych grup zawodowych."
+    )
+    edited_groups = st.data_editor(
+        st.session_state.groups_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="set_groups_editor",
+    )
+    if st.button("💾 Zapisz Konfigurację Grup", key="btn_save_groups"):
+      st.session_state.groups_df = edited_groups
+      st.success("Zapisano ustawienia czasu pracy grup!")
+
+  # Sub-tab 4: Stawki Nadgodzin i Palet
+  with sub_t4:
+    st.subheader("Stawki Finansowe (Nadgodziny i Załadunki/Palety)")
+    col_ot1, col_ot2 = st.columns(2)
+    with col_ot1:
+      st.markdown("**Stawki godzinowe za nadgodziny (zł/h):**")
+      st.session_state.ot_kierownik = st.number_input(
+          "Stawka - Kierownik (zł/h):",
+          value=float(st.session_state.ot_kierownik),
+          step=1.0,
+      )
+      st.session_state.ot_brygadzista = st.number_input(
+          "Stawka - Brygadzista (zł/h):",
+          value=float(st.session_state.ot_brygadzista),
+          step=1.0,
+      )
+      st.session_state.ot_magazynier = st.number_input(
+          "Stawka - Magazynier (zł/h):",
+          value=float(st.session_state.ot_magazynier),
+          step=1.0,
+      )
+    with col_ot2:
+      st.markdown("**Stawki załadunkowe / Palety:**")
+      st.session_state.rate_pallet = st.number_input(
+          "Stawka za paletę / załadunek (zł):",
+          value=float(st.session_state.rate_pallet),
+          step=0.5,
+      )
+      st.session_state.pallet_pool = st.number_input(
+          "Miesięczny budżet / pula paletowa (zł):",
+          value=float(st.session_state.pallet_pool),
+          step=50.0,
+      )
+    if st.button("💾 Zapisz Stawki Finansowe", key="btn_save_financial_rates"):
+      st.success("Stawki za nadgodziny oraz palety zostały zaktualizowane!")
+
+  # Sub-tab 5: Wskaźniki i Wagi
+  with sub_t5:
+    st.subheader("Parametry Produkcyjne, Wagi i Podstawa Premii")
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+      st.markdown("**Baza Odniesienia (Średnie 12-miesięczne):**")
+      st.session_state.base_bonus_salary = st.number_input(
+          "Podstawa do wyliczenia premii (zł netto):",
+          value=float(st.session_state.base_bonus_salary),
+          step=100.0,
+      )
+      st.session_state.avg_pcs_12m = st.number_input(
+          "Średnia roczna - Sztuki:",
+          value=float(st.session_state.avg_pcs_12m),
+          step=100.0,
+      )
+      st.session_state.avg_lines_12m = st.number_input(
+          "Średnia roczna - Pozycje:",
+          value=float(st.session_state.avg_lines_12m),
+          step=100.0,
+      )
+      st.session_state.avg_weight_12m = st.number_input(
+          "Średnia roczna - Waga towaru (kg):",
+          value=float(st.session_state.avg_weight_12m),
+          step=100.0,
+      )
+    with col_p2:
+      st.markdown("**Wagi Poszczególnych Wskaźników (%):**")
+      st.session_state.w_pcs = st.number_input(
+          "Waga wskaźnika Sztuki (%):",
+          value=float(st.session_state.w_pcs),
+          step=0.1,
+      )
+      st.session_state.w_lines = st.number_input(
+          "Waga wskaźnika Pozycje (%):",
+          value=float(st.session_state.w_lines),
+          step=0.1,
+      )
+      st.session_state.w_weight = st.number_input(
+          "Waga wskaźnika Waga (%):",
+          value=float(st.session_state.w_weight),
+          step=0.1,
+      )
+
+      total_w = st.session_state.w_pcs + st.session_state.w_lines + st.session_state.w_weight
+      if round(total_w, 2) != 100.0:
+        st.warning(f"⚠️ Suma wag wynosi obecnie **{total_w:.2f}%** (zalecane: 100%).")
+      else:
+        st.success("Suma wag wynosi dokładnie 100%.")
+
+    if st.button("💾 Zapisz Parametry Produkcyjne", key="btn_save_prod_params"):
+      st.success("Parametry produkcyjne i wagi wskaźników zostały zapisane!")
+
+  # Sub-tab 6: Premie Specjalne
+  with sub_t6:
+    st.subheader("Zarządzanie Premiami Specjalnymi")
+    st.caption(
+        "Dodawaj indywidualne premie uznaniowe przyznawane pracownikom w"
+        " danym miesiącu."
+    )
+    edited_specials = st.data_editor(
+        st.session_state.special_bonuses_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="set_specials_editor",
+    )
+    if st.button("💾 Zapisz Premie Specjalne", key="btn_save_specials"):
+      st.session_state.special_bonuses_df = edited_specials
+      st.success("Zapisano listę premii specjalnych!")
