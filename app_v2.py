@@ -1,14 +1,16 @@
 import calendar
 from datetime import datetime
 import io
+import json
 import os
 import pickle
 from fpdf import FPDF
+import google.generativeai as genai
 import holidays
 import pandas as pd
+import PIL.Image
 import plotly.express as px
 import streamlit as st
-import tempfile
 
 # ==========================================
 # KONFIGURACJA I CSS - V2
@@ -26,6 +28,7 @@ st.markdown(
     div.stButton > button { border-radius: 5px; border: 1px solid #ddd; }
     div.stDataFrame { border-radius: 10px; }
     h1, h2, h3 { color: #1e3a8a; }
+    .alert-box { background-color: #fee2e2; border-left: 5px solid #ef4444; padding: 12px; margin: 12px 0; border-radius: 6px; color: #991b1b; }
     </style>
 """,
     unsafe_allow_html=True,
@@ -53,9 +56,9 @@ def save_archive(archive_data):
 
 
 def normalize_name(name):
-  """Koryguje kolejność imienia i nazwiska oraz usuwa zbędne spacje,
+  """Sprowadza imię i nazwisko do alfabetycznej postaci wielkich liter.
 
-  umożliwiając poprawne porównywanie (np. 'JAN KOWALSKI' == 'KOWALSKI JAN').
+  Dzięki temu 'JAN KOWALSKI' oraz 'KOWALSKI JAN' są identycznie dopasowywane.
   """
   if pd.isna(name) or not str(name).strip():
     return ""
@@ -99,6 +102,57 @@ def get_col_sum_flexible(df, possible_names):
   return 0.0
 
 
+def process_attendance_photo(image_file, api_key):
+  """Odczytuje zdjęcie listy obecności z wykorzystaniem Gemini Vision AI, wyciągając faktyczne godziny wejścia/wyjścia oraz nadgodziny."""
+  try:
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+
+    img = PIL.Image.open(image_file)
+
+    prompt = """
+        Przeanalizuj podane zdjęcie ręcznie wypisanej listy obecności.
+        Zlokalizuj w tabeli dane:
+        1. Datę dzienną.
+        2. Imię i Nazwisko pracownika.
+        3. Faktyczną godzinę wejścia (rozpoczęcia pracy).
+        4. Faktyczną godzinę wyjścia (zakończenia pracy).
+        5. Wartość z kolumny przeznaczonej na NADGODZINY (np. nagłówek "Nadgodziny", "Nadg.", "Godziny dodatkowe", "Suma nadgodzin").
+
+        Zwróć wynik WYŁĄCZNIE jako poprawny kod JSON (tablica obiektów) o strukturze:
+        [
+          {
+            "data": "DD.MM.YYYY",
+            "osoba": "IMIE NAZWISKO",
+            "wejscie": "HH:MM",
+            "wyjscie": "HH:MM",
+            "nadgodziny": 0.0
+          }
+        ]
+        
+        Zasady:
+        - Z kolumny "Nadgodziny" wyciągnij liczbę godzin (np. 1.5, 2, 0.5). Jeśli brak wpisu lub kolumna jest pusta/brak nadgodzin, zwróć 0.0.
+        - Jeżeli na zdjęciu brakuje roku w dacie, użyj bieżącego roku.
+        - Odczytaj wszystkie widoczne wiersze z tabeli. Nie dodawaj tekstu przed ani po kodzie JSON.
+        """
+
+    response = model.generate_content([img, prompt])
+    raw_text = response.text.strip()
+
+    if raw_text.startswith("```json"):
+      raw_text = raw_text[7:]
+    if raw_text.endswith("```"):
+      raw_text = raw_text[:-3]
+
+    return json.loads(raw_text.strip())
+  except Exception as e:
+    st.error(f"Błąd analizy obrazu AI ({image_file.name}): {e}")
+    return []
+
+
+# ==========================================
+# DOMYŚLNE DANE KONFIGURACYJNE
+# ==========================================
 DEFAULT_ABSENCE_CODES = [
     {"Oznaczenie": "Brak", "Rodzaj nieobecności": "Brak"},
     {"Oznaczenie": "Z", "Rodzaj nieobecności": "URLOP NA ŻĄDANIE"},
@@ -215,8 +269,10 @@ if "special_bonuses_df" not in st.session_state:
   )
 if "imported_absences_df" not in st.session_state:
   st.session_state.imported_absences_df = pd.DataFrame()
+if "gemini_api_key" not in st.session_state:
+  st.session_state.gemini_api_key = ""
 
-# Inicjalizacja stanów konfiguracyjnych
+# Parametry wyliczeniowe
 if "base_bonus_salary" not in st.session_state:
   st.session_state.base_bonus_salary = 4300.0
 if "avg_lines_12m" not in st.session_state:
@@ -245,11 +301,11 @@ if "pallet_pool" not in st.session_state:
 
 
 # ==========================================
-# FRAGMENT EDYTORYCZNY Z IMPORTEM NIEBECNOŚCI I AUTO-UZUPEŁNIANIEM
+# FRAGMENT EDYTORYCZNY: IMPORTER NIEOBECNOŚCI + SKANER ZDJĘĆ
 # ==========================================
 @st.fragment
 def schedule_editor_fragment():
-  st.subheader("📥 Import Nieobecności z pliku Excel (Opcjonalnie)")
+  st.subheader("📥 1. Import Nieobecności z pliku Excel")
   with st.expander("Rozwiń panel importu pliku nieobecności"):
     uploaded_absence_file = st.file_uploader(
         "Wgraj plik Excel z nieobecnościami (np. Nieobecności za 08.2026.xlsx)",
@@ -323,13 +379,74 @@ def schedule_editor_fragment():
 
   st.markdown("---")
 
+  st.subheader("📸 2. Skanowanie List Obecności ze Zdjęć (AI Vision)")
+  with st.expander("Rozwiń panel skanowania zdjęć list obecności"):
+    api_key_in = st.text_input(
+        "Klucz API Google Gemini (wymagany do AI Vision):",
+        value=st.session_state.gemini_api_key,
+        type="password",
+        help="Wklej swój klucz z Google AI Studio, aby odczytywać zdjęcia list obecności.",
+    )
+    st.session_state.gemini_api_key = api_key_in
+
+    uploaded_photos = st.file_uploader(
+        "Wgrywaj zdjęcia list obecności z kolejnych dni:",
+        type=["jpg", "jpeg", "png"],
+        accept_multiple_files=True,
+    )
+
+    if uploaded_photos and st.button(
+        "🔍 Przeanalizuj zdjęcia i nanieś faktyczne godziny oraz nadgodziny"
+    ):
+      if not api_key_in:
+        st.error(
+            "Wprowadź klucz API Google Gemini, aby aktywować moduł wizyjny."
+        )
+      else:
+        df_temp = st.session_state.current_schedule_df.copy()
+        if "FAKTYCZNIE WEJŚCIE" not in df_temp.columns:
+          df_temp["FAKTYCZNIE WEJŚCIE"] = ""
+        if "FAKTYCZNIE WYJŚCIE" not in df_temp.columns:
+          df_temp["FAKTYCZNIE WYJŚCIE"] = ""
+
+        total_extracted = 0
+        for photo in uploaded_photos:
+          with st.spinner(f"Analizowanie pliku {photo.name}..."):
+            records = process_attendance_photo(photo, api_key_in)
+            for rec in records:
+              p_date = str(rec.get("data", "")).strip()
+              p_name_norm = normalize_name(rec.get("osoba", ""))
+              t_in = str(rec.get("wejscie", "")).strip()
+              t_out = str(rec.get("wyjscie", "")).strip()
+
+              try:
+                ot_val = float(rec.get("nadgodziny", 0.0))
+              except (ValueError, TypeError):
+                ot_val = 0.0
+
+              for idx, row in df_temp.iterrows():
+                row_name_norm = normalize_name(row["OSOBA"])
+                if row["DATA"] == p_date and row_name_norm == p_name_norm:
+                  df_temp.at[idx, "FAKTYCZNIE WEJŚCIE"] = t_in
+                  df_temp.at[idx, "FAKTYCZNIE WYJŚCIE"] = t_out
+                  df_temp.at[idx, "NADGODZINY (godz.)"] = ot_val
+                  total_extracted += 1
+
+        st.session_state.current_schedule_df = df_temp
+        st.success(
+            f"Pomyślnie dopasowano i zaktualizowano {total_extracted} wpisów ze"
+            " zdjęć!"
+        )
+        st.rerun()
+
+  st.markdown("---")
+
   if not st.session_state.current_schedule_df.empty:
     col_btn1, col_btn2, _ = st.columns([1, 1, 2])
     with col_btn1:
-      if st.button("⏱️ Uzupełnij godziny pracy", use_container_width=True):
+      if st.button("⏱️ Uzupełnij planowane godziny", use_container_width=True):
         df_temp = st.session_state.current_schedule_df.copy()
 
-        # 1. Nanieś importowane nieobecności przy użyciu elastycznego dopasowywania nazwisk
         if (
             not st.session_state.imported_absences_df.empty
             and "Pracownik" in st.session_state.imported_absences_df.columns
@@ -359,7 +476,6 @@ def schedule_editor_fragment():
 
           df_temp["NIEOBECNOŚĆ"] = df_temp.apply(apply_absences, axis=1)
 
-        # 2. Uzupełnij godziny pracy w zależności od nieobecności i dni wolnych
         def fill_hours(row):
           absence = str(row.get("NIEOBECNOŚĆ", "Brak")).strip()
           status = str(row.get("DZIEŃ PRACUJĄCY/WOLNY", "")).strip()
@@ -382,9 +498,7 @@ def schedule_editor_fragment():
         df_temp["GODZINA ZAKOŃCZENIA"] = [h[1] for h in hours_res]
 
         st.session_state.current_schedule_df = df_temp
-        st.success(
-            "Pomyślnie naniesiono nieobecności oraz uzupełniono godziny pracy!"
-        )
+        st.success("Pomyślnie naniesiono planowane godziny pracy!")
         st.rerun()
 
     with col_btn2:
@@ -404,6 +518,57 @@ def schedule_editor_fragment():
           use_container_width=True,
       )
 
+    df_curr = st.session_state.current_schedule_df.copy()
+
+    if "FAKTYCZNIE WEJŚCIE" not in df_curr.columns:
+      df_curr["FAKTYCZNIE WEJŚCIE"] = ""
+    if "FAKTYCZNIE WYJŚCIE" not in df_curr.columns:
+      df_curr["FAKTYCZNIE WYJŚCIE"] = ""
+
+    # ==========================================
+    # MODUŁ WERYFIKACJI BRAKUJĄCYCH PODPISÓW
+    # ==========================================
+    st.markdown("---")
+    st.subheader("⚠️ Weryfikacja Obecności i Brakujących Podpisów")
+
+    missing_signatures = df_curr[
+        (df_curr["DZIEŃ PRACUJĄCY/WOLNY"] == "Pracujący")
+        & (df_curr["NIEOBECNOŚĆ"].isin(["Brak", "", "None"]))
+        & (
+            (df_curr["FAKTYCZNIE WEJŚCIE"] == "")
+            | (df_curr["FAKTYCZNIE WEJŚCIE"].isna())
+        )
+    ]
+
+    if not missing_signatures.empty:
+      st.markdown(
+          f'<div class="alert-box"><strong>Wykryto'
+          f' {len(missing_signatures)} nieprawidłowości!</strong><br>Poniżsi'
+          " pracownicy mieli zaplanowany dzień pracujący, brak zarejestrowanego"
+          " wniosku o nieobecność w pliku Excel oraz brak odczytanego wpisu z"
+          " listy obecności na zdjęciu:</div>",
+          unsafe_allow_html=True,
+      )
+      st.dataframe(
+          missing_signatures[[
+              "DATA",
+              "DZIEŃ TYGODNIA",
+              "OSOBA",
+              "STANOWISKO",
+              "CZAS ZMIANY",
+              "NIEOBECNOŚĆ",
+          ]],
+          use_container_width=True,
+      )
+    else:
+      st.success(
+          "Wszystkie dni robocze posiadają udokumentowane pokrycie w podpisach"
+          " lub zarejestrowanych nieobecnościach."
+      )
+
+    st.markdown("---")
+    st.subheader("📋 Tabela Harmonogramu i Faktów")
+
     dynamic_absence_options = (
         st.session_state.absence_codes_df["Rodzaj nieobecności"]
         .dropna()
@@ -413,58 +578,30 @@ def schedule_editor_fragment():
     if "Brak" not in dynamic_absence_options:
       dynamic_absence_options = ["Brak"] + dynamic_absence_options
 
-    def on_editor_change():
-      if "schedule_editor" in st.session_state:
-        edited_data = st.session_state["schedule_editor"]
-        if isinstance(edited_data, dict):
-          edited_df = st.session_state.current_schedule_df.copy()
-
-          if "edited_rows" in edited_data:
-            for row_idx, changes in edited_data["edited_rows"].items():
-              for col_name, new_val in changes.items():
-                edited_df.at[int(row_idx), col_name] = new_val
-
-          mask_absent = ~edited_df["NIEOBECNOŚĆ"].isin(["Brak", ""])
-          edited_df.loc[mask_absent, "GODZINA ROZPOCZĘCIA"] = "NIEOBECNY"
-          edited_df.loc[mask_absent, "GODZINA ZAKOŃCZENIA"] = "NIEOBECNY"
-
-          mask_free = edited_df["DZIEŃ PRACUJĄCY/WOLNY"].isin(
-              ["Wolny", "Święto"]
-          ) | (
-              edited_df["CZAS ZMIANY"].astype(str).str.lower() == "wolne"
-          )
-          edited_df.loc[mask_free, "GODZINA ROZPOCZĘCIA"] = "Wolne"
-          edited_df.loc[mask_free, "GODZINA ZAKOŃCZENIA"] = "Wolne"
-
-          st.session_state.current_schedule_df = edited_df
-
     edited_df = st.data_editor(
-        st.session_state.current_schedule_df,
+        df_curr,
         column_config={
             "NIEOBECNOŚĆ": st.column_config.SelectboxColumn(
                 "NIEOBECNOŚĆ",
                 options=dynamic_absence_options,
                 required=True,
-                help="Wybierz powód nieobecności",
-            )
+            ),
+            "FAKTYCZNIE WEJŚCIE": st.column_config.TextColumn(
+                "FAKTYCZNIE WEJŚCIE (ze zdjęcia)"
+            ),
+            "FAKTYCZNIE WYJŚCIE": st.column_config.TextColumn(
+                "FAKTYCZNIE WYJŚCIE (ze zdjęcia)"
+            ),
+            "NADGODZINY (godz.)": st.column_config.NumberColumn(
+                "NADGODZINY (godz.)", min_value=0.0, max_value=24.0, step=0.5
+            ),
         },
         use_container_width=True,
         num_rows="fixed",
-        key="schedule_editor",
-        on_change=on_editor_change,
+        key="schedule_editor_main",
     )
 
     if isinstance(edited_df, pd.DataFrame):
-      mask_absent = ~edited_df["NIEOBECNOŚĆ"].isin(["Brak", ""])
-      edited_df.loc[mask_absent, "GODZINA ROZPOCZĘCIA"] = "NIEOBECNY"
-      edited_df.loc[mask_absent, "GODZINA ZAKOŃCZENIA"] = "NIEOBECNY"
-
-      mask_free = edited_df["DZIEŃ PRACUJĄCY/WOLNY"].isin(
-          ["Wolny", "Święto"]
-      ) | (edited_df["CZAS ZMIANY"].astype(str).str.lower() == "wolne")
-      edited_df.loc[mask_free, "GODZINA ROZPOCZĘCIA"] = "Wolne"
-      edited_df.loc[mask_free, "GODZINA ZAKOŃCZENIA"] = "Wolne"
-
       st.session_state.current_schedule_df = edited_df
 
 
@@ -654,7 +791,7 @@ with tab_gen:
           elif day_name == "sobota":
             czas_zmiany = "08:00-16:00"
 
-        # Nieobecność z pliku
+        # Dopasowywanie nieobecności
         default_absence = "Brak"
         if (
             not st.session_state.imported_absences_df.empty
@@ -688,6 +825,8 @@ with tab_gen:
             "DZIEŃ PRACUJĄCY/WOLNY": status_dzien,
             "GODZINA ROZPOCZĘCIA": default_start_end,
             "GODZINA ZAKOŃCZENIA": default_start_end,
+            "FAKTYCZNIE WEJŚCIE": "",
+            "FAKTYCZNIE WYJŚCIE": "",
             "NIEOBECNOŚĆ": default_absence,
             "NADGODZINY (godz.)": 0.0,
         })
@@ -764,8 +903,7 @@ with tab_calc:
     max_bonus_per_emp = base_salary * bonus_rate
 
     st.info(
-        f"💡 Aktualna podstawa do wyliczenia premii wynosi: **{base_salary:,.2f}"
-        " zł netto** (możesz ją zmodyfikować w zakładce *Ustawienia*)."
+        f"💡 Podstawa premiowa wynosi: **{base_salary:,.2f} zł netto**."
         .replace(",", " ")
         .replace(".", ",")
     )
@@ -943,7 +1081,8 @@ with tab_dash:
     st.plotly_chart(fig, use_container_width=True)
   else:
     st.info(
-        "Brak danych do wyświetlenia wykresów. Przejdź do kalkulatora premii."
+        "Brak danych do wyświetlenia wykresów. Wygeneruj harmonogram i przejdź"
+        " do kalkulatora."
     )
 
 # ==========================================
@@ -980,10 +1119,6 @@ with tab_comp:
 # ==========================================
 with tab_settings:
   st.header("⚙️ Pełna Konfiguracja Systemu i Parametrów")
-  st.caption(
-      "W tym miejscu możesz dostosować wszystkie moduły, stawki, składy"
-      " osobowe oraz definicje używane w całym systemie."
-  )
 
   sub_t1, sub_t2, sub_t3, sub_t4, sub_t5, sub_t6 = st.tabs([
       "🔤 Oznaczenia Nieobecności",
@@ -994,7 +1129,6 @@ with tab_settings:
       "🎁 Premie Specjalne",
   ])
 
-  # Sub-tab 1: Oznaczenia Nieobecności
   with sub_t1:
     st.subheader("Słownik Oznaczeń Nieobecności")
     edited_codes = st.data_editor(
@@ -1007,7 +1141,6 @@ with tab_settings:
       st.session_state.absence_codes_df = edited_codes
       st.success("Zapisano nowy słownik oznaczeń nieobecności!")
 
-  # Sub-tab 2: Skład Osobowy
   with sub_t2:
     st.subheader("Lista Pracowników i Przypisanie do Grup")
     edited_emp = st.data_editor(
@@ -1020,7 +1153,6 @@ with tab_settings:
       st.session_state.employees_df = edited_emp
       st.success("Lista pracowników została pomyślnie zaktualizowana!")
 
-  # Sub-tab 3: Grafik Grup
   with sub_t3:
     st.subheader("Definicje Zmian i Czasu Pracy Grup")
     edited_groups = st.data_editor(
@@ -1033,7 +1165,6 @@ with tab_settings:
       st.session_state.groups_df = edited_groups
       st.success("Zapisano ustawienia czasu pracy grup!")
 
-  # Sub-tab 4: Stawki Nadgodzin i Palet
   with sub_t4:
     st.subheader("Stawki Finansowe (Nadgodziny i Załadunki/Palety)")
     col_ot1, col_ot2 = st.columns(2)
@@ -1069,7 +1200,6 @@ with tab_settings:
     if st.button("💾 Zapisz Stawki Finansowe", key="btn_save_financial_rates"):
       st.success("Stawki za nadgodziny oraz palety zostały zaktualizowane!")
 
-  # Sub-tab 5: Wskaźniki i Wagi
   with sub_t5:
     st.subheader("Parametry Produkcyjne, Wagi i Podstawa Premii")
     col_p1, col_p2 = st.columns(2)
@@ -1128,7 +1258,6 @@ with tab_settings:
     if st.button("💾 Zapisz Parametry Produkcyjne", key="btn_save_prod_params"):
       st.success("Parametry produkcyjne i wagi wskaźników zostały zapisane!")
 
-  # Sub-tab 6: Premie Specjalne
   with sub_t6:
     st.subheader("Zarządzanie Premiami Specjalnymi")
     edited_specials = st.data_editor(
