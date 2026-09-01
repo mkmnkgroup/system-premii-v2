@@ -52,6 +52,18 @@ def save_archive(archive_data):
     pickle.dump(archive_data, f)
 
 
+def normalize_name(name):
+  """Koryguje kolejność imienia i nazwiska oraz usuwa zbędne spacje,
+
+  umożliwiając poprawne porównywanie (np. 'JAN KOWALSKI' == 'KOWALSKI JAN').
+  """
+  if pd.isna(name) or not str(name).strip():
+    return ""
+  words = str(name).strip().upper().split()
+  words.sort()
+  return " ".join(words)
+
+
 def remove_pl_chars(text):
   replacements = {
       "ą": "a",
@@ -264,7 +276,7 @@ def schedule_editor_fragment():
                 or str(emp_name).strip().lower() == "pracownik"
             ):
               continue
-            emp_name_clean = str(emp_name).strip().upper()
+            emp_name_clean = str(emp_name).strip()
 
             for c in range(1, raw_abs_df.shape[1]):
               cell_val = raw_abs_df.iloc[r, c]
@@ -317,7 +329,7 @@ def schedule_editor_fragment():
       if st.button("⏱️ Uzupełnij godziny pracy", use_container_width=True):
         df_temp = st.session_state.current_schedule_df.copy()
 
-        # 1. Nanieś importowane nieobecności
+        # 1. Nanieś importowane nieobecności przy użyciu elastycznego dopasowywania nazwisk
         if (
             not st.session_state.imported_absences_df.empty
             and "Pracownik" in st.session_state.imported_absences_df.columns
@@ -327,7 +339,7 @@ def schedule_editor_fragment():
               _,
               abs_row,
           ) in st.session_state.imported_absences_df.iterrows():
-            emp_k = str(abs_row["Pracownik"]).strip().upper()
+            emp_k = normalize_name(abs_row["Pracownik"])
             try:
               day_k = int(abs_row["Dzień"])
             except:
@@ -339,7 +351,7 @@ def schedule_editor_fragment():
               day_num = int(str(row["DATA"]).split(".")[0])
             except:
               day_num = None
-            emp_k = str(row["OSOBA"]).strip().upper()
+            emp_k = normalize_name(row["OSOBA"])
 
             if (emp_k, day_num) in abs_lookup:
               return abs_lookup[(emp_k, day_num)]
@@ -521,10 +533,8 @@ with tab_gen:
     maciej_early_days = set()
     maciej_emp = None
     for _, row_emp in st.session_state.employees_df.iterrows():
-      if (
-          "BORZĘCKI" in str(row_emp["OSOBA"]).upper()
-          or "MACIEJ" in str(row_emp["OSOBA"]).upper()
-      ):
+      norm_emp_name = normalize_name(row_emp["OSOBA"])
+      if "BORZECKI" in norm_emp_name or "MACIEJ" in norm_emp_name:
         maciej_emp = row_emp
         break
 
@@ -650,16 +660,11 @@ with tab_gen:
             not st.session_state.imported_absences_df.empty
             and "Pracownik" in st.session_state.imported_absences_df.columns
         ):
-          emp_upper = str(emp["OSOBA"]).strip().upper()
-          match_abs = st.session_state.imported_absences_df[
-              (
-                  st.session_state.imported_absences_df["Pracownik"]
-                  .astype(str)
-                  .str.strip()
-                  .str.upper()
-                  == emp_upper
-              )
-              & (st.session_state.imported_absences_df["Dzień"] == day)
+          emp_norm = normalize_name(emp["OSOBA"])
+          df_abs = st.session_state.imported_absences_df.copy()
+          df_abs["norm_emp"] = df_abs["Pracownik"].apply(normalize_name)
+          match_abs = df_abs[
+              (df_abs["norm_emp"] == emp_norm) & (df_abs["Dzień"] == day)
           ]
           if not match_abs.empty:
             code_found = match_abs.iloc[0]["Oznaczenie"]
