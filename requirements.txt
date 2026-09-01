@@ -5,3 +5,12 @@ xlrd
 plotly
 fpdf
 holidays
+Plaintext
+google-generativeai
+pandas
+openpyxl
+xlrd
+Pillow
+plotly
+holidays
+fpdf2
