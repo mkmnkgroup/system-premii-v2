@@ -4,7 +4,6 @@ import io
 import json
 import os
 import pickle
-from fpdf import FPDF
 import google.generativeai as genai
 import holidays
 import pandas as pd
@@ -13,7 +12,7 @@ import plotly.express as px
 import streamlit as st
 
 # ==========================================
-# KONFIGURACJA I CSS - V2
+# KONFIGURACJA I CSS
 # ==========================================
 st.set_page_config(
     page_title="System Rozliczania Harmonogramów v2",
@@ -29,13 +28,14 @@ st.markdown(
     div.stDataFrame { border-radius: 10px; }
     h1, h2, h3 { color: #1e3a8a; }
     .alert-box { background-color: #fee2e2; border-left: 5px solid #ef4444; padding: 12px; margin: 12px 0; border-radius: 6px; color: #991b1b; }
+    .success-box { background-color: #d1fae5; border-left: 5px solid #10b981; padding: 12px; margin: 12px 0; border-radius: 6px; color: #065f46; }
     </style>
 """,
     unsafe_allow_html=True,
 )
 
 # ==========================================
-# FUNKCJE POMOCNICZE
+# FUNKCJE POMOCNICZE I OBSŁUGA PLIKÓW
 # ==========================================
 ARCHIVE_FILE = "archiwum_premii_v2.pkl"
 
@@ -45,7 +45,7 @@ def load_archive():
     try:
       with open(ARCHIVE_FILE, "rb") as f:
         return pickle.load(f)
-    except:
+    except Exception:
       return {}
   return {}
 
@@ -64,32 +64,6 @@ def normalize_name(name):
   return " ".join(words)
 
 
-def remove_pl_chars(text):
-  replacements = {
-      "ą": "a",
-      "ć": "c",
-      "ę": "e",
-      "ł": "l",
-      "ń": "n",
-      "ó": "o",
-      "ś": "s",
-      "ź": "z",
-      "ż": "z",
-      "Ą": "A",
-      "Ć": "C",
-      "Ę": "E",
-      "Ł": "L",
-      "Ń": "N",
-      "Ó": "O",
-      "Ś": "S",
-      "Ź": "Z",
-      "Ż": "Z",
-  }
-  for k, v in replacements.items():
-    text = str(text).replace(k, v)
-  return text
-
-
 def get_col_sum_flexible(df, possible_names):
   if df.empty:
     return 0.0
@@ -99,22 +73,103 @@ def get_col_sum_flexible(df, possible_names):
   return 0.0
 
 
+def parse_daily_production(prod_df, year, month_idx):
+  """Parsuje plik produkcji i grupuje wartości (sztuki, pozycje, waga) na każdy dzień miesiąca."""
+  days_in_month = calendar.monthrange(year, month_idx)[1]
+  daily_map = {
+      day: {"pcs": 0.0, "lines": 0.0, "weight": 0.0}
+      for day in range(1, days_in_month + 1)
+  }
+
+  if not prod_df.empty:
+    date_col, pcs_col, lines_col, weight_col = None, None, None, None
+
+    for col in prod_df.columns:
+      c_low = str(col).strip().lower()
+      if not date_col and c_low in [
+          "data",
+          "date",
+          "dzień",
+          "dzien",
+          "data przyjęcia",
+          "data przyjecia",
+      ]:
+        date_col = col
+      if not pcs_col and c_low in [
+          "sztuki",
+          "sztuka",
+          "pcs",
+          "ilość sztuk",
+          "ilosc sztuk",
+      ]:
+        pcs_col = col
+      if not lines_col and c_low in [
+          "pozycje",
+          "pozycja",
+          "lines",
+          "ilość pozycji",
+          "ilosc pozycji",
+      ]:
+        lines_col = col
+      if not weight_col and c_low in [
+          "waga",
+          "waga łączna",
+          "waga laczna",
+          "weight",
+          "kg",
+      ]:
+        weight_col = col
+
+    if date_col:
+      for _, row in prod_df.iterrows():
+        raw_date = row[date_col]
+        if pd.isna(raw_date):
+          continue
+        try:
+          dt = pd.to_datetime(raw_date, dayfirst=True, errors="coerce")
+          if pd.notna(dt) and dt.year == year and dt.month == month_idx:
+            d = dt.day
+            p = (
+                float(pd.to_numeric(row[pcs_col], errors="coerce"))
+                if pcs_col and pd.notna(row[pcs_col])
+                else 0.0
+            )
+            l = (
+                float(pd.to_numeric(row[lines_col], errors="coerce"))
+                if lines_col and pd.notna(row[lines_col])
+                else 0.0
+            )
+            w = (
+                float(pd.to_numeric(row[weight_col], errors="coerce"))
+                if weight_col and pd.notna(row[weight_col])
+                else 0.0
+            )
+
+            if d in daily_map:
+              daily_map[d]["pcs"] += max(0.0, p)
+              daily_map[d]["lines"] += max(0.0, l)
+              daily_map[d]["weight"] += max(0.0, w)
+        except Exception:
+          pass
+
+  return daily_map
+
+
 def process_attendance_photo(image_file, api_key):
   """Odczytuje zdjęcie listy obecności z wykorzystaniem Gemini Vision AI."""
   try:
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemini-1.5-flash")
-
     img = PIL.Image.open(image_file)
 
     prompt = """
         Przeanalizuj podane zdjęcie ręcznie wypisanej listy obecności.
         Zlokalizuj w tabeli dane:
-        1. Datę dzienną.
+        1. Datę dzienną (DD.MM.YYYY).
         2. Imię i Nazwisko pracownika.
-        3. Faktyczną godzinę wejścia (rozpoczęcia pracy).
-        4. Faktyczną godzinę wyjścia (zakończenia pracy).
-        5. Wartość z kolumny przeznaczonej na NADGODZINY (np. "Nadgodziny", "Nadg.", "Godziny dodatkowe").
+        3. Faktyczną godzinę wejścia.
+        4. Faktyczną godzinę wyjścia.
+        5. Wartość z kolumny nadgodzin.
 
         Zwróć wynik WYŁĄCZNIE jako poprawny kod JSON (tablica obiektów):
         [
@@ -127,7 +182,6 @@ def process_attendance_photo(image_file, api_key):
           }
         ]
         """
-
     response = model.generate_content([img, prompt])
     raw_text = response.text.strip()
 
@@ -239,7 +293,17 @@ DEFAULT_EMPLOYEES = [
     },
 ]
 
-# Stan sesji
+PL_DAYS = {
+    0: "poniedziałek",
+    1: "wtorek",
+    2: "środa",
+    3: "czwartek",
+    4: "piątek",
+    5: "sobota",
+    6: "niedziela",
+}
+
+# Inicjalizacja Stanu Sesji
 if "history_v2" not in st.session_state:
   st.session_state.history_v2 = load_archive()
 if "current_schedule_df" not in st.session_state:
@@ -264,11 +328,11 @@ if "imported_absences_df" not in st.session_state:
 if "gemini_api_key" not in st.session_state:
   st.session_state.gemini_api_key = ""
 
-# Parametry wyliczeniowe
+# Parametry Wyliczeniowe
 if "base_bonus_salary" not in st.session_state:
   st.session_state.base_bonus_salary = 4300.0
 if "kierownik_bonus_multiplier" not in st.session_state:
-  st.session_state.kierownik_bonus_multiplier = 1.35  # NOWY PARAMETR
+  st.session_state.kierownik_bonus_multiplier = 1.35
 if "avg_lines_12m" not in st.session_state:
   st.session_state.avg_lines_12m = 17322.50
 if "w_lines" not in st.session_state:
@@ -288,35 +352,283 @@ if "ot_brygadzista" not in st.session_state:
   st.session_state.ot_brygadzista = 30.0
 if "ot_magazynier" not in st.session_state:
   st.session_state.ot_magazynier = 25.0
-if "rate_pallet" not in st.session_state:
-  st.session_state.rate_pallet = 10.0
-if "pallet_pool" not in st.session_state:
-  st.session_state.pallet_pool = 600.0
 
 
 # ==========================================
-# FRAGMENT EDYTORYCZNY: IMPORTER NIEOBECNOŚCI + SKANER ZDJĘĆ
+# FUNKCJA GENEROWANIA HARMONOGRAMU
 # ==========================================
-@st.fragment
-def schedule_editor_fragment():
-  st.subheader("📥 1. Import Nieobecności z pliku Excel")
-  with st.expander("Rozwiń panel importu pliku nieobecności"):
+def generate_schedule(year, month_idx):
+  days_in_month = calendar.monthrange(year, month_idx)[1]
+  pl_holidays = holidays.Poland(years=year)
+
+  maciej_early_days = set()
+  maciej_emp = None
+  for _, row_emp in st.session_state.employees_df.iterrows():
+    norm_emp_name = normalize_name(row_emp["OSOBA"])
+    if "BORZECKI" in norm_emp_name or "MACIEJ" in norm_emp_name:
+      maciej_emp = row_emp
+      break
+
+  if maciej_emp is not None:
+    for day in range(1, days_in_month + 1):
+      date_obj = datetime(year, month_idx, day)
+      day_name = PL_DAYS[date_obj.weekday()]
+      week_num = date_obj.isocalendar()[1]
+      is_holiday = date_obj in pl_holidays
+
+      is_working_day = True
+      sys_val = str(maciej_emp["SYSTEM"])
+      if "PONIEDZIAŁEK" in sys_val.upper() and day_name in [
+          "sobota",
+          "niedziela",
+      ]:
+        is_working_day = False
+      elif "WTOREK" in sys_val.upper() and day_name in [
+          "niedziela",
+          "poniedziałek",
+      ]:
+        is_working_day = False
+      if is_holiday:
+        is_working_day = False
+
+      if is_working_day:
+        try:
+          g_num = int(str(maciej_emp["GRUPA"]).replace("GRUPA", "").strip())
+        except Exception:
+          g_num = 1
+        shift_rotation = ((week_num - 1 + (g_num - 1)) % 3) + 1
+        if shift_rotation == 1:
+          maciej_early_days.add(date_obj.strftime("%d.%m.%Y"))
+
+  schedule_rows = []
+
+  for day in range(1, days_in_month + 1):
+    date_obj = datetime(year, month_idx, day)
+    date_str = date_obj.strftime("%d.%m.%Y")
+    day_name = PL_DAYS[date_obj.weekday()]
+    week_num = date_obj.isocalendar()[1]
+    is_holiday = date_obj in pl_holidays
+
+    for _, emp in st.session_state.employees_df.iterrows():
+      is_working_day = True
+      sys_val = str(emp["SYSTEM"])
+
+      if "PONIEDZIAŁEK" in sys_val.upper() and day_name in [
+          "sobota",
+          "niedziela",
+      ]:
+        is_working_day = False
+      elif "WTOREK" in sys_val.upper() and day_name in [
+          "niedziela",
+          "poniedziałek",
+      ]:
+        is_working_day = False
+      if is_holiday:
+        is_working_day = False
+
+      status_dzien = (
+          "Święto"
+          if is_holiday
+          else ("Pracujący" if is_working_day else "Wolny")
+      )
+
+      if not is_working_day:
+        czas_zmiany = "Wolne"
+        shift_val = "Wolne"
+        default_start_end = "Wolne"
+      else:
+        default_start_end = ""
+        g_str = str(emp["GRUPA"])
+        try:
+          g_num = int(g_str.replace("GRUPA", "").strip())
+        except Exception:
+          g_num = 1
+
+        matched_group_row = st.session_state.groups_df[
+            st.session_state.groups_df["Nazwa grupy"]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            == g_str.strip().upper()
+        ]
+        default_group_time = (
+            str(matched_group_row.iloc[0]["Czas pracy"])
+            if not matched_group_row.empty
+            else "08:00-16:00"
+        )
+
+        if g_num in [1, 2, 3]:
+          shift_rotation = ((week_num - 1 + (g_num - 1)) % 3) + 1
+          shift_val = shift_rotation
+          if shift_rotation == 1:
+            czas_zmiany = "06:00-14:00"
+          elif shift_rotation == 2:
+            czas_zmiany = "08:00-16:00"
+          else:
+            czas_zmiany = "11:00-19:00"
+        else:
+          czas_zmiany = default_group_time
+          shift_val = g_num
+
+        if g_num == 8:
+          if date_str in maciej_early_days:
+            czas_zmiany = "06:00-14:00"
+            shift_val = 1
+          else:
+            czas_zmiany = "07:30-15:30"
+            shift_val = 8
+
+        if day_name == "poniedziałek":
+          czas_zmiany = "08:00-17:00"
+        elif day_name == "sobota":
+          czas_zmiany = "08:00-16:00"
+
+      default_absence = "Brak"
+      if (
+          not st.session_state.imported_absences_df.empty
+          and "Pracownik" in st.session_state.imported_absences_df.columns
+      ):
+        emp_norm = normalize_name(emp["OSOBA"])
+        df_abs = st.session_state.imported_absences_df.copy()
+        df_abs["norm_emp"] = df_abs["Pracownik"].apply(normalize_name)
+        match_abs = df_abs[
+            (df_abs["norm_emp"] == emp_norm) & (df_abs["Dzień"] == day)
+        ]
+        if not match_abs.empty:
+          code_found = match_abs.iloc[0]["Oznaczenie"]
+          code_row = st.session_state.absence_codes_df[
+              st.session_state.absence_codes_df["Oznaczenie"]
+              .astype(str)
+              .str.strip()
+              .str.upper()
+              == str(code_found).strip().upper()
+          ]
+          if not code_row.empty:
+            default_absence = code_row.iloc[0]["Rodzaj nieobecności"]
+
+      schedule_rows.append({
+          "DATA": date_str,
+          "DZIEŃ TYGODNIA": day_name,
+          "OSOBA": emp["OSOBA"],
+          "STANOWISKO": emp["STANOWISKO"],
+          "ZMIANA": shift_val if not is_holiday else "Święto",
+          "CZAS ZMIANY": czas_zmiany,
+          "DZIEŃ PRACUJĄCY/WOLNY": status_dzien,
+          "GODZINA ROZPOCZĘCIA": default_start_end,
+          "GODZINA ZAKOŃCZENIA": default_start_end,
+          "FAKTYCZNIE WEJŚCIE": "",
+          "FAKTYCZNIE WYJŚCIE": "",
+          "NIEOBECNOŚĆ": default_absence,
+          "NADGODZINY (godz.)": 0.0,
+      })
+
+  return pd.DataFrame(schedule_rows)
+
+
+# ==========================================
+# PASEK BOCZNY
+# ==========================================
+st.sidebar.title("⚙️ Nawigacja i Ustawienia")
+st.sidebar.header("Ustawienia Okresu")
+months_list = [
+    "Styczeń",
+    "Luty",
+    "Marzec",
+    "Kwiecień",
+    "Maj",
+    "Czerwiec",
+    "Lipiec",
+    "Sierpień",
+    "Wrzesień",
+    "Październik",
+    "Listopad",
+    "Grudzień",
+]
+gen_month_name = st.sidebar.selectbox(
+    "Miesiąc:", months_list, index=datetime.now().month - 1
+)
+gen_month_idx = months_list.index(gen_month_name) + 1
+gen_year = st.sidebar.number_input("Rok:", value=datetime.now().year, step=1)
+period_key = f"{gen_month_name} {gen_year}"
+
+if st.sidebar.button("🚀 Wygeneruj nowy harmonogram", type="primary"):
+  st.session_state.current_schedule_df = generate_schedule(
+      gen_year, gen_month_idx
+  )
+  st.sidebar.success(f"Wygenerowano harmonogram na {period_key}!")
+
+st.sidebar.markdown("---")
+st.sidebar.header("📁 Wgrywanie Danych Produkcji")
+uploaded_month_file = st.sidebar.file_uploader(
+    "Plik z produkcją (Sztuki, Pozycje, Waga):",
+    type=["xlsx", "xls"],
+)
+
+if st.session_state.current_schedule_df.empty:
+  st.session_state.current_schedule_df = generate_schedule(
+      gen_year, gen_month_idx
+  )
+
+# ==========================================
+# ZAKŁADKI GŁÓWNE
+# ==========================================
+tab_gen, tab_calc, tab_dash, tab_history, tab_comp, tab_settings = st.tabs([
+    "📋 Harmonogram i Skaner",
+    "🧮 Kalkulator Premii",
+    "📊 Dashboard i Wykresy",
+    "📁 Archiwum Historyczne",
+    "📈 Porównanie Wyników",
+    "⚙️ Ustawienia Systemu",
+])
+
+# ==========================================
+# ZAKŁADKA 1: HARMONOGRAM I SKANER
+# ==========================================
+with tab_gen:
+  st.header("📋 Harmonogram Czasu Pracy i Rejestracja Obecności")
+
+  col_action1, col_action2, col_action3 = st.columns([1.5, 1.5, 2])
+  with col_action1:
+    if st.button("🔄 Przelicz / Wygeneruj Harmonogram na nowo"):
+      st.session_state.current_schedule_df = generate_schedule(
+          gen_year, gen_month_idx
+      )
+      st.success("Wygenerowano harmonogram!")
+      st.rerun()
+
+  with col_action2:
+    uploaded_schedule_excel = st.file_uploader(
+        "Wgraj gotowy plik Excel z Harmonogramem:",
+        type=["xlsx", "xls"],
+        key="direct_schedule_uploader",
+    )
+    if uploaded_schedule_excel is not None:
+      try:
+        loaded_df = pd.read_excel(uploaded_schedule_excel)
+        st.session_state.current_schedule_df = loaded_df
+        st.success("Wczytano harmonogram z pliku Excel!")
+      except Exception as e:
+        st.error(f"Błąd odczytu pliku: {e}")
+
+  st.markdown("---")
+
+  with st.expander("📥 1. Import Nieobecności z pliku Excel (opcjonalnie)"):
     uploaded_absence_file = st.file_uploader(
-        "Wgraj plik Excel z nieobecnościami (np. Nieobecności za 08.2026.xlsx)",
+        "Wgraj plik Excel z nieobecnościami",
         type=["xlsx", "xls"],
         key="absence_file_uploader",
     )
     if uploaded_absence_file is not None:
       try:
         raw_abs_df = pd.read_excel(uploaded_absence_file, header=None)
-        st.success("Plik nieobecności wczytany pomyślnie!")
         if st.button("Przetwarzaj i zaimportuj nieobecności do pamięci"):
           imported_records = []
-          abs_map = {}
-          for _, row in st.session_state.absence_codes_df.iterrows():
-            code = str(row["Oznaczenie"]).strip().upper()
-            desc = str(row["Rodzaj nieobecności"]).strip()
-            abs_map[code] = desc
+          abs_map = {
+              str(row["Oznaczenie"]).strip().upper(): str(
+                  row["Rodzaj nieobecności"]
+              ).strip()
+              for _, row in st.session_state.absence_codes_df.iterrows()
+          }
 
           for r in range(2, len(raw_abs_df)):
             emp_name = raw_abs_df.iloc[r, 0]
@@ -343,7 +655,7 @@ def schedule_editor_fragment():
                       ):
                         day_val = int(float(header_val))
                         break
-                    except:
+                    except Exception:
                       pass
                   if day_val is None:
                     day_val = c
@@ -371,18 +683,13 @@ def schedule_editor_fragment():
           st.session_state.imported_absences_df, use_container_width=True
       )
 
-  st.markdown("---")
-
-  st.subheader("📸 2. Skanowanie List Obecności ze Zdjęć (AI Vision)")
-  with st.expander("Rozwiń panel skanowania zdjęć list obecności"):
+  with st.expander(
+      "📸 2. Skanowanie List Obecności ze Zdjęć (AI Vision Gemini)"
+  ):
     api_key_in = st.text_input(
         "Klucz API Google Gemini (wymagany do AI Vision):",
         value=st.session_state.gemini_api_key,
         type="password",
-        help=(
-            "Wklej swój klucz z Google AI Studio, aby odczytywać zdjęcia list"
-            " obecności."
-        ),
     )
     st.session_state.gemini_api_key = api_key_in
 
@@ -415,10 +722,9 @@ def schedule_editor_fragment():
               p_name_norm = normalize_name(rec.get("osoba", ""))
               t_in = str(rec.get("wejscie", "")).strip()
               t_out = str(rec.get("wyjscie", "")).strip()
-
               try:
                 ot_val = float(rec.get("nadgodziny", 0.0))
-              except (ValueError, TypeError):
+              except Exception:
                 ot_val = 0.0
 
               for idx, row in df_temp.iterrows():
@@ -437,401 +743,158 @@ def schedule_editor_fragment():
         st.rerun()
 
   st.markdown("---")
+  col_b1, col_b2, _ = st.columns([1.5, 1.5, 2])
+  with col_b1:
+    if st.button("⏱️ Uzupełnij planowane godziny", use_container_width=True):
+      df_temp = st.session_state.current_schedule_df.copy()
 
-  if not st.session_state.current_schedule_df.empty:
-    col_btn1, col_btn2, _ = st.columns([1, 1, 2])
-    with col_btn1:
-      if st.button("⏱️ Uzupełnij planowane godziny", use_container_width=True):
-        df_temp = st.session_state.current_schedule_df.copy()
+      if (
+          not st.session_state.imported_absences_df.empty
+          and "Pracownik" in st.session_state.imported_absences_df.columns
+      ):
+        abs_lookup = {}
+        for _, abs_row in st.session_state.imported_absences_df.iterrows():
+          emp_k = normalize_name(abs_row["Pracownik"])
+          try:
+            day_k = int(abs_row["Dzień"])
+          except Exception:
+            continue
+          abs_lookup[(emp_k, day_k)] = abs_row["Opis"]
 
-        if (
-            not st.session_state.imported_absences_df.empty
-            and "Pracownik" in st.session_state.imported_absences_df.columns
-        ):
-          abs_lookup = {}
-          for (
-              _,
-              abs_row,
-          ) in st.session_state.imported_absences_df.iterrows():
-            emp_k = normalize_name(abs_row["Pracownik"])
-            try:
-              day_k = int(abs_row["Dzień"])
-            except:
-              continue
-            abs_lookup[(emp_k, day_k)] = abs_row["Opis"]
+        def apply_absences(row):
+          try:
+            day_num = int(str(row["DATA"]).split(".")[0])
+          except Exception:
+            day_num = None
+          emp_k = normalize_name(row["OSOBA"])
+          if (emp_k, day_num) in abs_lookup:
+            return abs_lookup[(emp_k, day_num)]
+          return row.get("NIEOBECNOŚĆ", "Brak")
 
-          def apply_absences(row):
-            try:
-              day_num = int(str(row["DATA"]).split(".")[0])
-            except:
-              day_num = None
-            emp_k = normalize_name(row["OSOBA"])
+        df_temp["NIEOBECNOŚĆ"] = df_temp.apply(apply_absences, axis=1)
 
-            if (emp_k, day_num) in abs_lookup:
-              return abs_lookup[(emp_k, day_num)]
-            return row.get("NIEOBECNOŚĆ", "Brak")
+      def fill_hours(row):
+        absence = str(row.get("NIEOBECNOŚĆ", "Brak")).strip()
+        status = str(row.get("DZIEŃ PRACUJĄCY/WOLNY", "")).strip()
+        shift_time = str(row.get("CZAS ZMIANY", "")).strip()
 
-          df_temp["NIEOBECNOŚĆ"] = df_temp.apply(apply_absences, axis=1)
+        if absence not in ["Brak", "", "None", "nan"]:
+          return "NIEOBECNY", "NIEOBECNOŚĆ"
+        if status in ["Wolny", "Święto"] or shift_time.lower() == "wolne":
+          return "Wolne", "Wolne"
+        if "-" in shift_time:
+          parts = shift_time.split("-")
+          return parts[0].strip(), parts[1].strip()
+        return "", ""
 
-        def fill_hours(row):
-          absence = str(row.get("NIEOBECNOŚĆ", "Brak")).strip()
-          status = str(row.get("DZIEŃ PRACUJĄCY/WOLNY", "")).strip()
-          shift_time = str(row.get("CZAS ZMIANY", "")).strip()
+      hours_res = df_temp.apply(fill_hours, axis=1)
+      df_temp["GODZINA ROZPOCZĘCIA"] = [h[0] for h in hours_res]
+      df_temp["GODZINA ZAKOŃCZENIA"] = [h[1] for h in hours_res]
 
-          if absence not in ["Brak", "", "None", "nan"]:
-            return "NIEOBECNY", "NIEOBECNOŚĆ"
+      st.session_state.current_schedule_df = df_temp
+      st.success("Naniesiono planowane godziny pracy!")
+      st.rerun()
 
-          if status in ["Wolny", "Święto"] or shift_time.lower() == "wolne":
-            return "Wolne", "Wolne"
-
-          if "-" in shift_time:
-            parts = shift_time.split("-")
-            return parts[0].strip(), parts[1].strip()
-
-          return "", ""
-
-        hours_res = df_temp.apply(fill_hours, axis=1)
-        df_temp["GODZINA ROZPOCZĘCIA"] = [h[0] for h in hours_res]
-        df_temp["GODZINA ZAKOŃCZENIA"] = [h[1] for h in hours_res]
-
-        st.session_state.current_schedule_df = df_temp
-        st.success("Pomyślnie naniesiono planowane godziny pracy!")
-        st.rerun()
-
-    with col_btn2:
-      buffer = io.BytesIO()
-      with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        st.session_state.current_schedule_df.to_excel(
-            writer, index=False, sheet_name="Harmonogram"
-        )
-      buffer.seek(0)
-      st.download_button(
-          label="📥 Pobierz Harmonogram (Excel)",
-          data=buffer,
-          file_name="Harmonogram.xlsx",
-          mime=(
-              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          ),
-          use_container_width=True,
+  with col_b2:
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+      st.session_state.current_schedule_df.to_excel(
+          writer, index=False, sheet_name="Harmonogram"
       )
-
-    df_curr = st.session_state.current_schedule_df.copy()
-
-    if "FAKTYCZNIE WEJŚCIE" not in df_curr.columns:
-      df_curr["FAKTYCZNIE WEJŚCIE"] = ""
-    if "FAKTYCZNIE WYJŚCIE" not in df_curr.columns:
-      df_curr["FAKTYCZNIE WYJŚCIE"] = ""
-
-    # ==========================================
-    # MODUŁ WERYFIKACJI BRAKUJĄCYCH PODPISÓW
-    # ==========================================
-    st.markdown("---")
-    st.subheader("⚠️ Weryfikacja Obecności i Brakujących Podpisów")
-
-    missing_signatures = df_curr[
-        (df_curr["DZIEŃ PRACUJĄCY/WOLNY"] == "Pracujący")
-        & (df_curr["NIEOBECNOŚĆ"].isin(["Brak", "", "None"]))
-        & (
-            (df_curr["FAKTYCZNIE WEJŚCIE"] == "")
-            | (df_curr["FAKTYCZNIE WEJŚCIE"].isna())
-        )
-    ]
-
-    if not missing_signatures.empty:
-      st.markdown(
-          f'<div class="alert-box"><strong>Wykryto'
-          f' {len(missing_signatures)} nieprawidłowości!</strong><br>Poniżsi'
-          " pracownicy mieli zaplanowany dzień pracujący, brak zarejestrowanego"
-          " wniosku o nieobecność w pliku Excel oraz brak odczytanego wpisu z"
-          " listy obecności na zdjęciu:</div>",
-          unsafe_allow_html=True,
-      )
-      st.dataframe(
-          missing_signatures[[
-              "DATA",
-              "DZIEŃ TYGODNIA",
-              "OSOBA",
-              "STANOWISKO",
-              "CZAS ZMIANY",
-              "NIEOBECNOŚĆ",
-          ]],
-          use_container_width=True,
-      )
-    else:
-      st.success(
-          "Wszystkie dni robocze posiadają udokumentowane pokrycie w podpisach"
-          " lub zarejestrowanych nieobecnościach."
-      )
-
-    st.markdown("---")
-    st.subheader("📋 Tabela Harmonogramu i Faktów")
-
-    dynamic_absence_options = (
-        st.session_state.absence_codes_df["Rodzaj nieobecności"]
-        .dropna()
-        .unique()
-        .tolist()
-    )
-    if "Brak" not in dynamic_absence_options:
-      dynamic_absence_options = ["Brak"] + dynamic_absence_options
-
-    edited_df = st.data_editor(
-        df_curr,
-        column_config={
-            "NIEOBECNOŚĆ": st.column_config.SelectboxColumn(
-                "NIEOBECNOŚĆ",
-                options=dynamic_absence_options,
-                required=True,
-            ),
-            "FAKTYCZNIE WEJŚCIE": st.column_config.TextColumn(
-                "FAKTYCZNIE WEJŚCIE (ze zdjęcia)"
-            ),
-            "FAKTYCZNIE WYJŚCIE": st.column_config.TextColumn(
-                "FAKTYCZNIE WYJŚCIE (ze zdjęcia)"
-            ),
-            "NADGODZINY (godz.)": st.column_config.NumberColumn(
-                "NADGODZINY (godz.)", min_value=0.0, max_value=24.0, step=0.5
-            ),
-        },
+    buffer.seek(0)
+    st.download_button(
+        label="📥 Pobierz Harmonogram (Excel)",
+        data=buffer,
+        file_name=f"Harmonogram_{period_key.replace(' ', '_')}.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
         use_container_width=True,
-        num_rows="fixed",
-        key="schedule_editor_main",
     )
 
-    if isinstance(edited_df, pd.DataFrame):
-      st.session_state.current_schedule_df = edited_df
+  df_curr = st.session_state.current_schedule_df.copy()
+  if "FAKTYCZNIE WEJŚCIE" not in df_curr.columns:
+    df_curr["FAKTYCZNIE WEJŚCIE"] = ""
+  if "FAKTYCZNIE WYJŚCIE" not in df_curr.columns:
+    df_curr["FAKTYCZNIE WYJŚCIE"] = ""
 
+  st.markdown("---")
+  st.subheader("⚠️ Weryfikacja Obecności i Brakujących Podpisów")
 
-# ==========================================
-# ZAKŁADKI GŁÓWNE
-# ==========================================
-tab_gen, tab_calc, tab_dash, tab_history, tab_comp, tab_settings = st.tabs([
-    "📋 Generator Harmonogramu",
-    "🧮 Kalkulator Premii",
-    "📊 Dashboard i Wykresy",
-    "📁 Archiwum Historyczne",
-    "📈 Porównanie Wyników",
-    "⚙️ Ustawienia Systemu",
-])
+  missing_signatures = df_curr[
+      (df_curr["DZIEŃ PRACUJĄCY/WOLNY"] == "Pracujący")
+      & (df_curr["NIEOBECNOŚĆ"].isin(["Brak", "", "None"]))
+      & (
+          (df_curr["FAKTYCZNIE WEJŚCIE"] == "")
+          | (df_curr["FAKTYCZNIE WEJŚCIE"].isna())
+      )
+  ]
 
-PL_DAYS = {
-    0: "poniedziałek",
-    1: "wtorek",
-    2: "środa",
-    3: "czwartek",
-    4: "piątek",
-    5: "sobota",
-    6: "niedziela",
-}
+  if not missing_signatures.empty:
+    st.markdown(
+        f'<div class="alert-box"><strong>Wykryto'
+        f' {len(missing_signatures)} nieprawidłowości!</strong><br>Poniżsi'
+        " pracownicy mieli zaplanowany dzień pracujący, brak zarejestrowanej"
+        " nieobecności oraz brak odczytanego wpisu z listy obecności ze"
+        " zdjęcia:</div>",
+        unsafe_allow_html=True,
+    )
+    st.dataframe(
+        missing_signatures[[
+            "DATA",
+            "DZIEŃ TYGODNIA",
+            "OSOBA",
+            "STANOWISKO",
+            "CZAS ZMIANY",
+            "NIEOBECNOŚĆ",
+        ]],
+        use_container_width=True,
+    )
+  else:
+    st.markdown(
+        '<div class="success-box"><strong>Wszystko w porządku!</strong>'
+        " Wszystkie dni robocze mają pokrycie w podpisach lub zgłoszonych"
+        " nieobecnościach.</div>",
+        unsafe_allow_html=True,
+    )
 
-# Panel boczny - Ustawienia Okresu
-st.sidebar.title("⚙️ Wersja v2")
-st.sidebar.header("Ustawienia Okresu")
-months_list = [
-    "Styczeń",
-    "Luty",
-    "Marzec",
-    "Kwiecień",
-    "Maj",
-    "Czerwiec",
-    "Lipiec",
-    "Sierpień",
-    "Wrzesień",
-    "Październik",
-    "Listopad",
-    "Grudzień",
-]
-gen_month_name = st.sidebar.selectbox(
-    "Miesiąc:", months_list, index=datetime.now().month - 1
-)
-gen_month_idx = months_list.index(gen_month_name) + 1
-gen_year = st.sidebar.number_input("Rok:", value=datetime.now().year, step=1)
-period_key = f"{gen_month_name} {gen_year}"
+  st.markdown("---")
+  st.subheader(f"📋 Tabela Harmonogramu ({period_key})")
 
-# Panel boczny - Wgrywanie plików z produkcją
-st.sidebar.markdown("---")
-st.sidebar.header("📁 Wgrywanie Danych z Produkcji")
-uploaded_month_file = st.sidebar.file_uploader(
-    "Główny plik z produkcją (Sztuki, Pozycje, Waga, Palety):",
-    type=["xlsx", "xls"],
-)
+  dynamic_absence_options = (
+      st.session_state.absence_codes_df["Rodzaj nieobecności"]
+      .dropna()
+      .unique()
+      .tolist()
+  )
+  if "Brak" not in dynamic_absence_options:
+    dynamic_absence_options = ["Brak"] + dynamic_absence_options
 
-# ==========================================
-# ZAKŁADKA 1: HARMONOGRAM
-# ==========================================
-with tab_gen:
-  if st.sidebar.button("🚀 Generuj harmonogram", type="primary"):
-    days_in_month = calendar.monthrange(gen_year, gen_month_idx)[1]
-    pl_holidays = holidays.Poland(years=gen_year)
+  edited_df = st.data_editor(
+      df_curr,
+      column_config={
+          "NIEOBECNOŚĆ": st.column_config.SelectboxColumn(
+              "NIEOBECNOŚĆ",
+              options=dynamic_absence_options,
+              required=True,
+          ),
+          "FAKTYCZNIE WEJŚCIE": st.column_config.TextColumn(
+              "FAKTYCZNIE WEJŚCIE"
+          ),
+          "FAKTYCZNIE WYJŚCIE": st.column_config.TextColumn(
+              "FAKTYCZNIE WYJŚCIE"
+          ),
+          "NADGODZINY (godz.)": st.column_config.NumberColumn(
+              "NADGODZINY (godz.)", min_value=0.0, max_value=24.0, step=0.5
+          ),
+      },
+      use_container_width=True,
+      num_rows="fixed",
+      key="main_schedule_table_editor",
+  )
 
-    maciej_early_days = set()
-    maciej_emp = None
-    for _, row_emp in st.session_state.employees_df.iterrows():
-      norm_emp_name = normalize_name(row_emp["OSOBA"])
-      if "BORZECKI" in norm_emp_name or "MACIEJ" in norm_emp_name:
-        maciej_emp = row_emp
-        break
-
-    if maciej_emp is not None:
-      for day in range(1, days_in_month + 1):
-        date_obj = datetime(gen_year, gen_month_idx, day)
-        day_name = PL_DAYS[date_obj.weekday()]
-        week_num = date_obj.isocalendar()[1]
-        is_holiday = date_obj in pl_holidays
-
-        is_working_day = True
-        sys_val = str(maciej_emp["SYSTEM"])
-        if "PONIEDZIAŁEK" in sys_val.upper() and day_name in [
-            "sobota",
-            "niedziela",
-        ]:
-          is_working_day = False
-        elif "WTOREK" in sys_val.upper() and day_name in [
-            "niedziela",
-            "poniedziałek",
-        ]:
-          is_working_day = False
-        if is_holiday:
-          is_working_day = False
-
-        if is_working_day:
-          try:
-            g_num = int(
-                str(maciej_emp["GRUPA"]).replace("GRUPA", "").strip()
-            )
-          except:
-            g_num = 1
-          shift_rotation = ((week_num - 1 + (g_num - 1)) % 3) + 1
-          if shift_rotation == 1:
-            maciej_early_days.add(date_obj.strftime("%d.%m.%Y"))
-
-    schedule_rows = []
-
-    for day in range(1, days_in_month + 1):
-      date_obj = datetime(gen_year, gen_month_idx, day)
-      date_str = date_obj.strftime("%d.%m.%Y")
-      day_name = PL_DAYS[date_obj.weekday()]
-      week_num = date_obj.isocalendar()[1]
-      is_holiday = date_obj in pl_holidays
-
-      for _, emp in st.session_state.employees_df.iterrows():
-        is_working_day = True
-        sys_val = str(emp["SYSTEM"])
-
-        if "PONIEDZIAŁEK" in sys_val.upper() and day_name in [
-            "sobota",
-            "niedziela",
-        ]:
-          is_working_day = False
-        elif "WTOREK" in sys_val.upper() and day_name in [
-            "niedziela",
-            "poniedziałek",
-        ]:
-          is_working_day = False
-        if is_holiday:
-          is_working_day = False
-
-        status_dzien = (
-            "Święto"
-            if is_holiday
-            else ("Pracujący" if is_working_day else "Wolny")
-        )
-
-        if not is_working_day:
-          czas_zmiany = "Wolne"
-          shift_val = "Wolne"
-          default_start_end = "Wolne"
-        else:
-          default_start_end = ""
-          g_str = str(emp["GRUPA"])
-          try:
-            g_num = int(g_str.replace("GRUPA", "").strip())
-          except:
-            g_num = 1
-
-          matched_group_row = st.session_state.groups_df[
-              st.session_state.groups_df["Nazwa grupy"]
-              .astype(str)
-              .str.strip()
-              .str.upper()
-              == g_str.strip().upper()
-          ]
-          default_group_time = (
-              str(matched_group_row.iloc[0]["Czas pracy"])
-              if not matched_group_row.empty
-              else "08:00-16:00"
-          )
-
-          if g_num in [1, 2, 3]:
-            shift_rotation = ((week_num - 1 + (g_num - 1)) % 3) + 1
-            shift_val = shift_rotation
-            if shift_rotation == 1:
-              czas_zmiany = "06:00-14:00"
-            elif shift_rotation == 2:
-              czas_zmiany = "08:00-16:00"
-            else:
-              czas_zmiany = "11:00-19:00"
-          else:
-            czas_zmiany = default_group_time
-            shift_val = g_num
-
-          if g_num == 8:
-            if date_str in maciej_early_days:
-              czas_zmiany = "06:00-14:00"
-              shift_val = 1
-            else:
-              czas_zmiany = "07:30-15:30"
-              shift_val = 8
-
-          if day_name == "poniedziałek":
-            czas_zmiany = "08:00-17:00"
-          elif day_name == "sobota":
-            czas_zmiany = "08:00-16:00"
-
-        # Dopasowywanie nieobecności
-        default_absence = "Brak"
-        if (
-            not st.session_state.imported_absences_df.empty
-            and "Pracownik" in st.session_state.imported_absences_df.columns
-        ):
-          emp_norm = normalize_name(emp["OSOBA"])
-          df_abs = st.session_state.imported_absences_df.copy()
-          df_abs["norm_emp"] = df_abs["Pracownik"].apply(normalize_name)
-          match_abs = df_abs[
-              (df_abs["norm_emp"] == emp_norm) & (df_abs["Dzień"] == day)
-          ]
-          if not match_abs.empty:
-            code_found = match_abs.iloc[0]["Oznaczenie"]
-            code_row = st.session_state.absence_codes_df[
-                st.session_state.absence_codes_df["Oznaczenie"]
-                .astype(str)
-                .str.strip()
-                .str.upper()
-                == str(code_found).strip().upper()
-            ]
-            if not code_row.empty:
-              default_absence = code_row.iloc[0]["Rodzaj nieobecności"]
-
-        schedule_rows.append({
-            "DATA": date_str,
-            "DZIEŃ TYGODNIA": day_name,
-            "OSOBA": emp["OSOBA"],
-            "STANOWISKO": emp["STANOWISKO"],
-            "ZMIANA": shift_val if not is_holiday else "Święto",
-            "CZAS ZMIANY": czas_zmiany,
-            "DZIEŃ PRACUJĄCY/WOLNY": status_dzien,
-            "GODZINA ROZPOCZĘCIA": default_start_end,
-            "GODZINA ZAKOŃCZENIA": default_start_end,
-            "FAKTYCZNIE WEJŚCIE": "",
-            "FAKTYCZNIE WYJŚCIE": "",
-            "NIEOBECNOŚĆ": default_absence,
-            "NADGODZINY (godz.)": 0.0,
-        })
-
-    st.session_state.current_schedule_df = pd.DataFrame(schedule_rows)
-    st.success(f"Wygenerowano harmonogram v2 na {period_key}!")
-
-  schedule_editor_fragment()
+  if isinstance(edited_df, pd.DataFrame):
+    st.session_state.current_schedule_df = edited_df
 
 # ==========================================
 # ZAKŁADKA 2: KALKULATOR PREMII
@@ -840,7 +903,9 @@ with tab_calc:
   st.header("🧮 Rozliczenie Premiowe i Wynagrodzeń Dodatkowych")
 
   if st.session_state.current_schedule_df.empty:
-    st.warning("Najpierw wygeneruj harmonogram w pierwszej zakładce!")
+    st.warning(
+        "Najpierw wygeneruj lub wgraj harmonogram w pierwszej zakładce!"
+    )
   else:
     base_salary = st.session_state.base_bonus_salary
     step_bonus_pct = 0.04
@@ -858,17 +923,13 @@ with tab_calc:
       )
 
     df_sched = st.session_state.current_schedule_df
-    cur_pcs, cur_lines, cur_weight, cur_pallets = 0.0, 0.0, 0.0, 0.0
+    cur_pcs, cur_lines, cur_weight = 0.0, 0.0, 0.0
 
     if not prod_df.empty:
       cur_pcs = get_col_sum_flexible(prod_df, ["Sztuki", "sztuka"])
       cur_lines = get_col_sum_flexible(prod_df, ["pozycje", "Pozycje"])
       cur_weight = get_col_sum_flexible(
           prod_df, ["Waga łączna", "Waga laczna", "Waga"]
-      )
-      cur_pallets = get_col_sum_flexible(
-          prod_df,
-          ["Palety", "Liczba palet", "Załadunki", "Paleciaki", "Paleta"],
       )
 
     dev_pcs = (
@@ -898,7 +959,7 @@ with tab_calc:
     max_bonus_per_emp = base_salary * bonus_rate
 
     st.info(
-        f"💡 Podstawa premiowa wynosi: **{base_salary:,.2f} zł netto** | Mnożnik"
+        f"💡 Podstawa premiowa: **{base_salary:,.2f} zł netto** | Mnożnik"
         " dla Kierownika:"
         f" **{st.session_state.kierownik_bonus_multiplier:.2f}x**"
         .replace(",", " ")
@@ -906,7 +967,7 @@ with tab_calc:
     )
 
     st.markdown("---")
-    st.subheader("📌 1. Wyniki Produkcyjne i Wskaźnik Wydajności")
+    st.subheader("📌 1. Miesięczne Wyniki Produkcyjne i Wskaźnik Wydajności")
     comparison_data = [
         {
             "Parametr produkcyjny": "Pozycje",
@@ -999,8 +1060,78 @@ with tab_calc:
           ),
       )
 
+    # =========================================================
+    # NOWA SEKCJA: DZIENNA ANALIZA PRZYJĘĆ I NAKŁADU PRACY
+    # =========================================================
     st.markdown("---")
-    st.subheader("👥 2. Szczegółowe Rozliczenie Pracowników")
+    st.subheader(
+        "📅 2. Dzienna Analiza Przyjęć i Rozkład Pracy (% Miesiąca)"
+    )
+
+    daily_map = parse_daily_production(prod_df, gen_year, gen_month_idx)
+    days_in_month = calendar.monthrange(gen_year, gen_month_idx)[1]
+
+    daily_rows = []
+    daily_chart_data = []
+
+    for day in range(1, days_in_month + 1):
+      date_obj = datetime(gen_year, gen_month_idx, day)
+      date_str = date_obj.strftime("%d.%m.%Y")
+      day_name = PL_DAYS[date_obj.weekday()]
+
+      pcs_d = daily_map[day]["pcs"]
+      lines_d = daily_map[day]["lines"]
+      weight_d = daily_map[day]["weight"]
+
+      pct_pcs_d = (pcs_d / cur_pcs * 100.0) if cur_pcs > 0 else 0.0
+      pct_lines_d = (lines_d / cur_lines * 100.0) if cur_lines > 0 else 0.0
+      pct_weight_d = (weight_d / cur_weight * 100.0) if cur_weight > 0 else 0.0
+
+      # Ważony udział pracy w danym dniu
+      pct_work_d = (
+          (pct_pcs_d * w_pcs_frac)
+          + (pct_lines_d * w_lines_frac)
+          + (pct_weight_d * w_weight_frac)
+      )
+
+      daily_rows.append({
+          "Data": date_str,
+          "Dzień tygodnia": day_name,
+          "Sztuki": f"{pcs_d:,.0f}".replace(",", " "),
+          "Pozycje": f"{lines_d:,.0f}".replace(",", " "),
+          "Waga (kg)": f"{weight_d:,.2f}".replace(",", " ").replace(".", ","),
+          "% Sztuk": f"{pct_pcs_d:.2f}%".replace(".", ","),
+          "% Pozycji": f"{pct_lines_d:.2f}%".replace(".", ","),
+          "% Wagi": f"{pct_weight_d:.2f}%".replace(".", ","),
+          "% Pracy w miesiącu": f"{pct_work_d:.2f}%".replace(".", ","),
+      })
+
+      daily_chart_data.append({
+          "Data": f"{day:02d}.{gen_month_idx:02d}",
+          "% Pracy": round(pct_work_d, 2),
+      })
+
+    daily_df = pd.DataFrame(daily_rows)
+    st.dataframe(daily_df, use_container_width=True, hide_index=True)
+
+    # Wykres rozkładu pracy w poszczególnych dniach
+    if cur_pcs > 0 or cur_lines > 0 or cur_weight > 0:
+      fig_daily = px.bar(
+          pd.DataFrame(daily_chart_data),
+          x="Data",
+          y="% Pracy",
+          title=(
+              "Dzienny rozkład nakładu pracy (% udziału w skali całego"
+              " miesiąca)"
+          ),
+          text_auto=".2f",
+          labels={"% Pracy": "% Udział w pracy"},
+      )
+      fig_daily.update_traces(marker_color="#1e3a8a")
+      st.plotly_chart(fig_daily, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("👥 3. Szczegółowe Rozliczenie Pracowników")
 
     emp_summary = []
     unique_emps = (
@@ -1012,14 +1143,16 @@ with tab_calc:
           df_sched["OSOBA"].str.strip().str.upper()
           == str(emp_name).strip().upper()
       ]
-      emp_info = st.session_state.employees_df[
+      emp_info_matches = st.session_state.employees_df[
           st.session_state.employees_df["OSOBA"] == emp_name
-      ].iloc[0]
+      ]
+      emp_info = (
+          emp_info_matches.iloc[0] if not emp_info_matches.empty else {}
+      )
 
       position = emp_info.get("STANOWISKO", "MAGAZYNIER")
       func = emp_info.get("FUNKCJA", "")
 
-      # Liczba dni przepracowanych i nieobecności
       days_worked = len(
           emp_df[
               (emp_df["DZIEŃ PRACUJĄCY/WOLNY"] == "Pracujący")
@@ -1031,7 +1164,6 @@ with tab_calc:
       )
       total_ot = emp_df["NADGODZINY (godz.)"].sum()
 
-      # Wyliczenie stawki nadgodzinowej zależnej od stanowiska
       ot_rate = st.session_state.ot_magazynier
       if "KIEROWNIK" in str(position).upper():
         ot_rate = st.session_state.ot_kierownik
@@ -1040,7 +1172,6 @@ with tab_calc:
 
       ot_pay = total_ot * ot_rate
 
-      # Wyliczenie proporcjonalnej premii bazowej
       scheduled_work_days = len(
           emp_df[emp_df["DZIEŃ PRACUJĄCY/WOLNY"] == "Pracujący"]
       )
@@ -1051,9 +1182,6 @@ with tab_calc:
       )
       calculated_bonus = max_bonus_per_emp * attendance_ratio
 
-      # ==========================================
-      # LOGIKA MNOŻNIKA DLA KIEROWNIKA MAGAZYNU
-      # ==========================================
       is_kierownik = (
           "KIEROWNIK" in str(position).upper()
           or "KIEROWNIK" in str(func).upper()
@@ -1061,7 +1189,6 @@ with tab_calc:
       if is_kierownik:
         calculated_bonus *= st.session_state.kierownik_bonus_multiplier
 
-      # Dopasowanie premii specjalnych
       spec_bonus_val = 0.0
       if not st.session_state.special_bonuses_df.empty:
         matched_spec = st.session_state.special_bonuses_df[
@@ -1089,7 +1216,6 @@ with tab_calc:
     summary_df = pd.DataFrame(emp_summary)
     st.dataframe(summary_df, use_container_width=True)
 
-    # Zapis do archiwum
     if st.button("💾 Zapisz rozliczenie do Archiwum Historycznego"):
       st.session_state.history_v2[period_key] = {
           "summary": summary_df,
@@ -1206,16 +1332,12 @@ with tab_settings:
         step=100.0,
     )
 
-    # DEDYKOWANE POLE USTAWIEŃ MNOŻNIKA DLA KIEROWNIKA
     st.session_state.kierownik_bonus_multiplier = st.number_input(
         "Mnożnik premii dla Kierownika Magazynu:",
         value=float(st.session_state.kierownik_bonus_multiplier),
         step=0.05,
         format="%.2f",
-        help=(
-            "Premia wyliczona dla Kierownika zostanie pomnożona przez ten"
-            " wskaźnik (domyślnie 1.35)."
-        ),
+        help="Mnożnik stosowany do wyliczonej premii Kierownika (np. 1.35).",
     )
 
     st.subheader("⏱️ Stawki za Nadgodziny (zł/godz.)")
