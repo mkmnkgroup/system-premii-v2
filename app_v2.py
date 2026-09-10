@@ -4,6 +4,7 @@ import io
 import json
 import os
 import pickle
+import re
 import google.generativeai as genai
 import holidays
 import pandas as pd
@@ -12,10 +13,10 @@ import plotly.express as px
 import streamlit as st
 
 # ==========================================
-# KONFIGURACJA I CSS
+# KONFIGURACJA I STYLIZACJA CSS
 # ==========================================
 st.set_page_config(
-    page_title="System Rozliczania Harmonogramów v2",
+    page_title="System Rozliczania Harmonogramów v2.1",
     layout="wide",
     page_icon="📈",
 )
@@ -24,9 +25,8 @@ st.markdown(
     """
     <style>
     .stApp { background-color: #f8f9fa; }
-    div.stButton > button { border-radius: 5px; border: 1px solid #ddd; }
-    div.stDataFrame { border-radius: 10px; }
-    h1, h2, h3 { color: #1e3a8a; }
+    div.stButton > button { border-radius: 6px; border: 1px solid #cbd5e1; font-weight: 500; }
+    div[data-testid="stMetricValue"] { font-size: 1.8rem !important; color: #1e3a8a; }
     .alert-box { background-color: #fee2e2; border-left: 5px solid #ef4444; padding: 12px; margin: 12px 0; border-radius: 6px; color: #991b1b; }
     .success-box { background-color: #d1fae5; border-left: 5px solid #10b981; padding: 12px; margin: 12px 0; border-radius: 6px; color: #065f46; }
     .pay-slip { background-color: #ffffff; border: 2px solid #1e3a8a; border-radius: 10px; padding: 20px; margin-bottom: 25px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
@@ -41,7 +41,7 @@ st.markdown(
 )
 
 # ==========================================
-# FUNKCJE POMOCNICZE I OBSŁUGA PLIKÓW
+# CACHE I MECHANIZMY POMOCNICZE
 # ==========================================
 ARCHIVE_FILE = "archiwum_premii_v2.pkl"
 
@@ -62,7 +62,6 @@ def save_archive(archive_data):
 
 
 def normalize_name(name):
-  """Sprowadza imię i nazwisko do alfabetycznej postaci wielkich liter."""
   if pd.isna(name) or not str(name).strip():
     return ""
   words = str(name).strip().upper().split()
@@ -73,14 +72,23 @@ def normalize_name(name):
 def get_col_sum_flexible(df, possible_names):
   if df.empty:
     return 0.0
+  low_possible = [p.lower() for p in possible_names]
   for col in df.columns:
-    if str(col).strip().lower() in [p.lower() for p in possible_names]:
+    if str(col).strip().lower() in low_possible:
       return float(pd.to_numeric(df[col], errors="coerce").fillna(0).sum())
   return 0.0
 
 
-def parse_daily_production(prod_df, year, month_idx):
-  """Parsuje plik produkcji i grupuje wartości (sztuki, pozycje, waga) na każdy dzień miesiąca."""
+@st.cache_data(show_spinner=False)
+def load_excel_cached(file_bytes, filename):
+  ext = filename.split(".")[-1].lower()
+  return pd.read_excel(
+      io.BytesIO(file_bytes), engine="xlrd" if ext == "xls" else "openpyxl"
+  )
+
+
+@st.cache_data(show_spinner=False)
+def parse_daily_production_cached(prod_df, year, month_idx):
   days_in_month = calendar.monthrange(year, month_idx)[1]
   daily_map = {
       day: {"pcs": 0.0, "lines": 0.0, "weight": 0.0}
@@ -162,7 +170,6 @@ def parse_daily_production(prod_df, year, month_idx):
 
 
 def process_attendance_photo(image_file, api_key):
-  """Odczytuje zdjęcie listy obecności z wykorzystaniem Gemini Vision AI."""
   try:
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemini-1.5-flash")
@@ -191,19 +198,18 @@ def process_attendance_photo(image_file, api_key):
     response = model.generate_content([img, prompt])
     raw_text = response.text.strip()
 
-    if raw_text.startswith("```json"):
-      raw_text = raw_text[7:]
-    if raw_text.endswith("```"):
-      raw_text = raw_text[:-3]
+    match = re.search(r"\[.*\]", raw_text, re.DOTALL)
+    if match:
+      raw_text = match.group(0)
 
-    return json.loads(raw_text.strip())
+    return json.loads(raw_text)
   except Exception as e:
     st.error(f"Błąd analizy obrazu AI ({image_file.name}): {e}")
     return []
 
 
 # ==========================================
-# DOMYŚLNE DANE KONFIGURACYJNE
+# DOMYŚLNE DANE SYSTEMOWE
 # ==========================================
 DEFAULT_ABSENCE_CODES = [
     {"Oznaczenie": "Brak", "Rodzaj nieobecności": "Brak"},
@@ -343,7 +349,7 @@ if "imported_absences_df" not in st.session_state:
 if "gemini_api_key" not in st.session_state:
   st.session_state.gemini_api_key = ""
 
-# Parametry Wyliczeniowe i Dodatki
+# Parametry
 if "base_bonus_salary" not in st.session_state:
   st.session_state.base_bonus_salary = 4300.0
 if "kierownik_bonus_multiplier" not in st.session_state:
@@ -375,18 +381,20 @@ if "ot_magazynier" not in st.session_state:
 
 
 # ==========================================
-# FUNKCJA GENEROWANIA HARMONOGRAMU
+# GENEROWANIE HARMONOGRAMU
 # ==========================================
-def generate_schedule(year, month_idx):
+@st.cache_data(show_spinner=False)
+def generate_schedule_cached(year, month_idx, emp_tuples, groups_tuples):
   days_in_month = calendar.monthrange(year, month_idx)[1]
   pl_holidays = holidays.Poland(years=year)
 
   maciej_early_days = set()
   maciej_emp = None
-  for _, row_emp in st.session_state.employees_df.iterrows():
-    norm_emp_name = normalize_name(row_emp["OSOBA"])
+
+  for emp in emp_tuples:
+    norm_emp_name = normalize_name(emp.get("OSOBA", ""))
     if "BORZECKI" in norm_emp_name or "MACIEJ" in norm_emp_name:
-      maciej_emp = row_emp
+      maciej_emp = emp
       break
 
   if maciej_emp is not None:
@@ -397,7 +405,7 @@ def generate_schedule(year, month_idx):
       is_holiday = date_obj in pl_holidays
 
       is_working_day = True
-      sys_val = str(maciej_emp["SYSTEM"])
+      sys_val = str(maciej_emp.get("SYSTEM", ""))
       if "PONIEDZIAŁEK" in sys_val.upper() and day_name in [
           "sobota",
           "niedziela",
@@ -413,7 +421,9 @@ def generate_schedule(year, month_idx):
 
       if is_working_day:
         try:
-          g_num = int(str(maciej_emp["GRUPA"]).replace("GRUPA", "").strip())
+          g_num = int(
+              str(maciej_emp.get("GRUPA", "")).replace("GRUPA", "").strip()
+          )
         except Exception:
           g_num = 1
         shift_rotation = ((week_num - 1 + (g_num - 1)) % 3) + 1
@@ -429,9 +439,9 @@ def generate_schedule(year, month_idx):
     week_num = date_obj.isocalendar()[1]
     is_holiday = date_obj in pl_holidays
 
-    for _, emp in st.session_state.employees_df.iterrows():
+    for emp in emp_tuples:
       is_working_day = True
-      sys_val = str(emp["SYSTEM"])
+      sys_val = str(emp.get("SYSTEM", ""))
 
       if "PONIEDZIAŁEK" in sys_val.upper() and day_name in [
           "sobota",
@@ -458,24 +468,20 @@ def generate_schedule(year, month_idx):
         default_start_end = "Wolne"
       else:
         default_start_end = ""
-        g_str = str(emp["GRUPA"])
+        g_str = str(emp.get("GRUPA", ""))
         try:
           g_num = int(g_str.replace("GRUPA", "").strip())
         except Exception:
           g_num = 1
 
-        matched_group_row = st.session_state.groups_df[
-            st.session_state.groups_df["Nazwa grupy"]
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            == g_str.strip().upper()
-        ]
-        default_group_time = (
-            str(matched_group_row.iloc[0]["Czas pracy"])
-            if not matched_group_row.empty
-            else "08:00-16:00"
-        )
+        default_group_time = "08:00-16:00"
+        for g_row in groups_tuples:
+          if (
+              str(g_row.get("Nazwa grupy", "")).strip().upper()
+              == g_str.strip().upper()
+          ):
+            default_group_time = str(g_row.get("Czas pracy", "08:00-16:00"))
+            break
 
         if g_num in [1, 2, 3]:
           shift_rotation = ((week_num - 1 + (g_num - 1)) % 3) + 1
@@ -503,34 +509,11 @@ def generate_schedule(year, month_idx):
         elif day_name == "sobota":
           czas_zmiany = "08:00-16:00"
 
-      default_absence = "Brak"
-      if (
-          not st.session_state.imported_absences_df.empty
-          and "Pracownik" in st.session_state.imported_absences_df.columns
-      ):
-        emp_norm = normalize_name(emp["OSOBA"])
-        df_abs = st.session_state.imported_absences_df.copy()
-        df_abs["norm_emp"] = df_abs["Pracownik"].apply(normalize_name)
-        match_abs = df_abs[
-            (df_abs["norm_emp"] == emp_norm) & (df_abs["Dzień"] == day)
-        ]
-        if not match_abs.empty:
-          code_found = match_abs.iloc[0]["Oznaczenie"]
-          code_row = st.session_state.absence_codes_df[
-              st.session_state.absence_codes_df["Oznaczenie"]
-              .astype(str)
-              .str.strip()
-              .str.upper()
-              == str(code_found).strip().upper()
-          ]
-          if not code_row.empty:
-            default_absence = code_row.iloc[0]["Rodzaj nieobecności"]
-
       schedule_rows.append({
           "DATA": date_str,
           "DZIEŃ TYGODNIA": day_name,
-          "OSOBA": emp["OSOBA"],
-          "STANOWISKO": emp["STANOWISKO"],
+          "OSOBA": emp.get("OSOBA", ""),
+          "STANOWISKO": emp.get("STANOWISKO", ""),
           "ZMIANA": shift_val if not is_holiday else "Święto",
           "CZAS ZMIANY": czas_zmiany,
           "DZIEŃ PRACUJĄCY/WOLNY": status_dzien,
@@ -538,18 +521,165 @@ def generate_schedule(year, month_idx):
           "GODZINA ZAKOŃCZENIA": default_start_end,
           "FAKTYCZNIE WEJŚCIE": "",
           "FAKTYCZNIE WYJŚCIE": "",
-          "NIEOBECNOŚĆ": default_absence,
+          "NIEOBECNOŚĆ": "Brak",
           "NADGODZINY (godz.)": 0.0,
       })
 
   return pd.DataFrame(schedule_rows)
 
 
+def generate_schedule(year, month_idx):
+  emp_tuples = tuple(st.session_state.employees_df.to_dict("records"))
+  groups_tuples = tuple(st.session_state.groups_df.to_dict("records"))
+  return generate_schedule_cached(year, month_idx, emp_tuples, groups_tuples)
+
+
+# ==========================================
+# GŁÓWNA LOGIKA KALKULATORA WYNAGRODZEŃ
+# ==========================================
+def calculate_payroll(
+    df_sched,
+    employees_df,
+    max_bonus_per_emp,
+    total_forklift_hours,
+    pallet_pay_per_selected_emp,
+    selected_pallet_emps,
+    daily_work_pct_map,
+):
+  emp_summary = []
+  emp_details_map = {}
+  unique_emps = employees_df["OSOBA"].dropna().unique().tolist()
+
+  for emp_name in unique_emps:
+    emp_df = df_sched[
+        df_sched["OSOBA"].str.strip().str.upper()
+        == str(emp_name).strip().upper()
+    ]
+    emp_info_matches = employees_df[employees_df["OSOBA"] == emp_name]
+    emp_info = emp_info_matches.iloc[0] if not emp_info_matches.empty else {}
+
+    position = emp_info.get("STANOWISKO", "MAGAZYNIER")
+    func = emp_info.get("FUNKCJA", "")
+    emp_forklift_hours = float(emp_info.get("CZAS WÓZKA (godz.)", 0.0))
+
+    days_worked = len(
+        emp_df[
+            (emp_df["DZIEŃ PRACUJĄCY/WOLNY"] == "Pracujący")
+            & (emp_df["NIEOBECNOŚĆ"].isin(["Brak", "", "None"]))
+        ]
+    )
+    absent_rows = emp_df[~emp_df["NIEOBECNOŚĆ"].isin(["Brak", "", "None"])]
+    absent_days = len(absent_rows)
+    total_ot = emp_df["NADGODZINY (godz.)"].sum()
+
+    ot_rate = st.session_state.ot_magazynier
+    if "KIEROWNIK" in str(position).upper():
+      ot_rate = st.session_state.ot_kierownik
+    elif "BRYGADZISTA" in str(position).upper():
+      ot_rate = st.session_state.ot_brygadzista
+
+    ot_pay = total_ot * ot_rate
+    scheduled_work_days = len(
+        emp_df[emp_df["DZIEŃ PRACUJĄCY/WOLNY"] == "Pracujący"]
+    )
+    attendance_ratio = (
+        (days_worked / scheduled_work_days) if scheduled_work_days > 0 else 0.0
+    )
+    deduction_pct = (1.0 - attendance_ratio) * 100.0
+
+    base_emp_bonus = max_bonus_per_emp
+    if "KIEROWNIK" in str(position).upper() or "KIEROWNIK" in str(func).upper():
+      base_emp_bonus *= st.session_state.kierownik_bonus_multiplier
+
+    calculated_bonus = base_emp_bonus * attendance_ratio
+
+    emp_forklift_pct = (
+        (emp_forklift_hours / total_forklift_hours * 100.0)
+        if total_forklift_hours > 0
+        else 0.0
+    )
+    forklift_pay = (
+        (st.session_state.forklift_pool * (emp_forklift_pct / 100.0))
+        if total_forklift_hours > 0
+        else 0.0
+    )
+    pallet_pay = (
+        pallet_pay_per_selected_emp if emp_name in selected_pallet_emps else 0.0
+    )
+
+    spec_bonus_val = 0.0
+    if not st.session_state.special_bonuses_df.empty:
+      matched_spec = st.session_state.special_bonuses_df[
+          st.session_state.special_bonuses_df["Pracownik"].apply(
+              normalize_name
+          )
+          == normalize_name(emp_name)
+      ]
+      spec_bonus_val = matched_spec["Kwota netto premii"].sum()
+
+    total_payout = (
+        calculated_bonus + ot_pay + spec_bonus_val + forklift_pay + pallet_pay
+    )
+
+    absences_list = []
+    for _, abs_r in absent_rows.iterrows():
+      try:
+        day_n = int(str(abs_r["DATA"]).split(".")[0])
+      except Exception:
+        day_n = 1
+      day_work_pct = daily_work_pct_map.get(day_n, 0.0)
+
+      absences_list.append({
+          "Data": abs_r["DATA"],
+          "Dzień tygodnia": abs_r["DZIEŃ TYGODNIA"],
+          "Rodzaj nieobecności": abs_r["NIEOBECNOŚĆ"],
+          "Udział pracy w miesiącu (%)": day_work_pct,
+      })
+
+    emp_summary.append({
+        "Pracownik": emp_name,
+        "Stanowisko": position,
+        "Dni przepracowane": days_worked,
+        "Dni nieobecności": absent_days,
+        "% Potrącenia": deduction_pct,
+        "Czas wózka (h)": emp_forklift_hours,
+        "% Udział wózek": emp_forklift_pct,
+        "Dodatek Wózek (zł)": forklift_pay,
+        "Dodatek Palety (zł)": pallet_pay,
+        "Nadgodziny (godz.)": total_ot,
+        "Nadgodziny (zł)": ot_pay,
+        "Premia (zł)": calculated_bonus,
+        "Premia Specjalna (zł)": spec_bonus_val,
+        "ŁĄCZNA PREMIA / DODATKI (zł)": total_payout,
+    })
+
+    emp_details_map[emp_name] = {
+        "position": position,
+        "emp_forklift_hours": emp_forklift_hours,
+        "emp_forklift_pct": emp_forklift_pct,
+        "forklift_pay": forklift_pay,
+        "pallet_pay": pallet_pay,
+        "days_worked": days_worked,
+        "scheduled_days": scheduled_work_days,
+        "absent_days": absent_days,
+        "deduction_pct": deduction_pct,
+        "base_emp_bonus": base_emp_bonus,
+        "calculated_bonus": calculated_bonus,
+        "total_ot": total_ot,
+        "ot_pay": ot_pay,
+        "spec_bonus_val": spec_bonus_val,
+        "total_payout": total_payout,
+        "absences_table": pd.DataFrame(absences_list),
+    }
+
+  return pd.DataFrame(emp_summary), emp_details_map
+
+
 # ==========================================
 # PASEK BOCZNY
 # ==========================================
-st.sidebar.title("⚙️ Nawigacja i Ustawienia")
-st.sidebar.header("Ustawienia Okresu")
+st.sidebar.title("⚙️ Nawigacja")
+st.sidebar.header("Okres Rozliczeniowy")
 months_list = [
     "Styczeń",
     "Luty",
@@ -571,17 +701,16 @@ gen_month_idx = months_list.index(gen_month_name) + 1
 gen_year = st.sidebar.number_input("Rok:", value=datetime.now().year, step=1)
 period_key = f"{gen_month_name} {gen_year}"
 
-if st.sidebar.button("🚀 Wygeneruj nowy harmonogram", type="primary"):
+if st.sidebar.button("🚀 Wygeneruj Harmonogram", type="primary"):
   st.session_state.current_schedule_df = generate_schedule(
       gen_year, gen_month_idx
   )
-  st.sidebar.success(f"Wygenerowano harmonogram na {period_key}!")
+  st.sidebar.success(f"Wygenerowano na {period_key}!")
 
 st.sidebar.markdown("---")
-st.sidebar.header("📁 Wgrywanie Danych Produkcji")
+st.sidebar.header("📁 Plik Produkcji")
 uploaded_month_file = st.sidebar.file_uploader(
-    "Plik z produkcją (Sztuki, Pozycje, Waga, Palety):",
-    type=["xlsx", "xls"],
+    "Wgraj raport produkcji (Excel):", type=["xlsx", "xls"]
 )
 
 if st.session_state.current_schedule_df.empty:
@@ -590,7 +719,7 @@ if st.session_state.current_schedule_df.empty:
   )
 
 # ==========================================
-# ZAKŁADKI GŁÓWNE
+# ZAKŁADKI
 # ==========================================
 tab_gen, tab_calc, tab_dash, tab_history, tab_comp, tab_settings = st.tabs([
     "📋 Harmonogram i Skaner",
@@ -609,7 +738,7 @@ with tab_gen:
 
   col_action1, col_action2, _ = st.columns([1.5, 1.5, 2])
   with col_action1:
-    if st.button("🔄 Przelicz / Wygeneruj Harmonogram na nowo"):
+    if st.button("🔄 Wygeneruj ponownie Harmonogram"):
       st.session_state.current_schedule_df = generate_schedule(
           gen_year, gen_month_idx
       )
@@ -618,21 +747,23 @@ with tab_gen:
 
   with col_action2:
     uploaded_schedule_excel = st.file_uploader(
-        "Wgraj gotowy plik Excel z Harmonogramem:",
+        "Wgraj gotowy plik z Harmonogramem:",
         type=["xlsx", "xls"],
         key="direct_schedule_uploader",
     )
     if uploaded_schedule_excel is not None:
       try:
-        loaded_df = pd.read_excel(uploaded_schedule_excel)
+        loaded_df = load_excel_cached(
+            uploaded_schedule_excel.getvalue(), uploaded_schedule_excel.name
+        )
         st.session_state.current_schedule_df = loaded_df
-        st.success("Wczytano harmonogram z pliku Excel!")
+        st.success("Wczytano harmonogram z pliku!")
       except Exception as e:
         st.error(f"Błąd odczytu pliku: {e}")
 
   st.markdown("---")
 
-  with st.expander("📥 1. Import Nieobecności z pliku Excel (opcjonalnie)"):
+  with st.expander("📥 1. Import Nieobecności z pliku Excel"):
     uploaded_absence_file = st.file_uploader(
         "Wgraj plik Excel z nieobecnościami",
         type=["xlsx", "xls"],
@@ -640,8 +771,10 @@ with tab_gen:
     )
     if uploaded_absence_file is not None:
       try:
-        raw_abs_df = pd.read_excel(uploaded_absence_file, header=None)
-        if st.button("Przetwarzaj i zaimportuj nieobecności do pamięci"):
+        raw_abs_df = load_excel_cached(
+            uploaded_absence_file.getvalue(), uploaded_absence_file.name
+        )
+        if st.button("Zaimportuj nieobecności"):
           imported_records = []
           abs_map = {
               str(row["Oznaczenie"]).strip().upper(): str(
@@ -690,15 +823,11 @@ with tab_gen:
           st.session_state.imported_absences_df = pd.DataFrame(
               imported_records
           )
-          st.success(
-              f"Pomyślnie zaimportowano {len(imported_records)} wpisów"
-              " nieobecności!"
-          )
+          st.success(f"Zaimportowano {len(imported_records)} wpisów!")
       except Exception as e:
-        st.error(f"Błąd podczas parsowania pliku nieobecności: {e}")
+        st.error(f"Błąd parsowania pliku nieobecności: {e}")
 
     if not st.session_state.imported_absences_df.empty:
-      st.markdown("**Podgląd zaimportowanych nieobecności:**")
       st.dataframe(
           st.session_state.imported_absences_df, use_container_width=True
       )
@@ -707,25 +836,23 @@ with tab_gen:
       "📸 2. Skanowanie List Obecności ze Zdjęć (AI Vision Gemini)"
   ):
     api_key_in = st.text_input(
-        "Klucz API Google Gemini (wymagany do AI Vision):",
+        "Klucz API Google Gemini:",
         value=st.session_state.gemini_api_key,
         type="password",
     )
     st.session_state.gemini_api_key = api_key_in
 
     uploaded_photos = st.file_uploader(
-        "Wgrywaj zdjęcia list obecności z kolejnych dni:",
+        "Wgrywaj zdjęcia list obecności:",
         type=["jpg", "jpeg", "png"],
         accept_multiple_files=True,
     )
 
     if uploaded_photos and st.button(
-        "🔍 Przeanalizuj zdjęcia i nanieś faktyczne godziny oraz nadgodziny"
+        "🔍 Przeanalizuj zdjęcia i zaktualizuj godziny"
     ):
       if not api_key_in:
-        st.error(
-            "Wprowadź klucz API Google Gemini, aby aktywować moduł wizyjny."
-        )
+        st.error("Wprowadź klucz API Google Gemini.")
       else:
         df_temp = st.session_state.current_schedule_df.copy()
         if "FAKTYCZNIE WEJŚCIE" not in df_temp.columns:
@@ -756,10 +883,7 @@ with tab_gen:
                   total_extracted += 1
 
         st.session_state.current_schedule_df = df_temp
-        st.success(
-            f"Pomyślnie dopasowano i zaktualizowano {total_extracted} wpisów ze"
-            " zdjęć!"
-        )
+        st.success(f"Dopasowano i zaktualizowano {total_extracted} wpisów!")
         st.rerun()
 
   st.markdown("---")
@@ -812,7 +936,7 @@ with tab_gen:
       df_temp["GODZINA ZAKOŃCZENIA"] = [h[1] for h in hours_res]
 
       st.session_state.current_schedule_df = df_temp
-      st.success("Naniesiono planowane godziny pracy!")
+      st.success("Naniesiono planowane godziny!")
       st.rerun()
 
   with col_b2:
@@ -853,10 +977,7 @@ with tab_gen:
   if not missing_signatures.empty:
     st.markdown(
         f'<div class="alert-box"><strong>Wykryto'
-        f' {len(missing_signatures)} nieprawidłowości!</strong><br>Poniżsi'
-        " pracownicy mieli zaplanowany dzień pracujący, brak zarejestrowanej"
-        " nieobecności oraz brak odczytanego wpisu z listy obecności ze"
-        " zdjęcia:</div>",
+        f' {len(missing_signatures)} brakujących podpisów na listach!</strong></div>',
         unsafe_allow_html=True,
     )
     st.dataframe(
@@ -873,8 +994,7 @@ with tab_gen:
   else:
     st.markdown(
         '<div class="success-box"><strong>Wszystko w porządku!</strong>'
-        " Wszystkie dni robocze mają pokrycie w podpisach lub zgłoszonych"
-        " nieobecnościach.</div>",
+        " Wszystkie dni robocze mają pokrycie w podpisach.</div>",
         unsafe_allow_html=True,
     )
 
@@ -936,10 +1056,8 @@ with tab_calc:
 
     prod_df = pd.DataFrame()
     if uploaded_month_file is not None:
-      ext = uploaded_month_file.name.split(".")[-1].lower()
-      prod_df = pd.read_excel(
-          uploaded_month_file,
-          engine="xlrd" if ext == "xls" else "openpyxl",
+      prod_df = load_excel_cached(
+          uploaded_month_file.getvalue(), uploaded_month_file.name
       )
 
     df_sched = st.session_state.current_schedule_df
@@ -988,81 +1106,55 @@ with tab_calc:
         " | Pula na wózki:"
         f" **{st.session_state.forklift_pool:,.2f} zł netto** | Stawka za"
         f" paletę: **{st.session_state.rate_pallet:,.2f} zł netto**"
-        .replace(",", " ")
-        .replace(".", ",")
     )
 
     st.markdown("---")
     st.subheader("📌 1. Miesięczne Wyniki Produkcyjne i Wskaźnik Wydajności")
+
     comparison_data = [
         {
             "Parametr produkcyjny": "Pozycje",
-            "Wartość w miesiącu": f"{cur_lines:,.2f}".replace(",", " ").replace(
-                ".", ","
-            ),
-            "Średnia roczna (baza)": (
-                f"{st.session_state.avg_lines_12m:,.2f}".replace(
-                    ",", " "
-                ).replace(".", ",")
-            ),
-            "Różnica ilościowa": (
-                f"{(cur_lines - st.session_state.avg_lines_12m):+,.2f}".replace(
-                    ",", " "
-                ).replace(".", ",")
-            ),
-            "Odchylenie procentowe (%)": f"{dev_lines * 100:+.2f}%".replace(
-                ".", ","
-            ),
-            "Waga wskaźnika": f"{st.session_state.w_lines:.2f}%".replace(
-                ".", ","
-            ),
+            "Wartość w miesiącu": cur_lines,
+            "Średnia roczna (baza)": st.session_state.avg_lines_12m,
+            "Różnica ilościowa": cur_lines - st.session_state.avg_lines_12m,
+            "Odchylenie procentowe (%)": dev_lines * 100,
+            "Waga wskaźnika (%)": st.session_state.w_lines,
         },
         {
             "Parametr produkcyjny": "Sztuki",
-            "Wartość w miesiącu": f"{cur_pcs:,.2f}".replace(",", " ").replace(
-                ".", ","
-            ),
-            "Średnia roczna (baza)": (
-                f"{st.session_state.avg_pcs_12m:,.2f}".replace(
-                    ",", " "
-                ).replace(".", ",")
-            ),
-            "Różnica ilościowa": (
-                f"{(cur_pcs - st.session_state.avg_pcs_12m):+,.2f}".replace(
-                    ",", " "
-                ).replace(".", ",")
-            ),
-            "Odchylenie procentowe (%)": f"{dev_pcs * 100:+.2f}%".replace(
-                ".", ","
-            ),
-            "Waga wskaźnika": f"{st.session_state.w_pcs:.2f}%".replace(
-                ".", ","
-            ),
+            "Wartość w miesiącu": cur_pcs,
+            "Średnia roczna (baza)": st.session_state.avg_pcs_12m,
+            "Różnica ilościowa": cur_pcs - st.session_state.avg_pcs_12m,
+            "Odchylenie procentowe (%)": dev_pcs * 100,
+            "Waga wskaźnika (%)": st.session_state.w_pcs,
         },
         {
-            "Parametr produkcyjny": "Waga towaru",
-            "Wartość w miesiącu": f"{cur_weight:,.2f} kg".replace(
-                ",", " "
-            ).replace(".", ","),
-            "Średnia roczna (baza)": (
-                f"{st.session_state.avg_weight_12m:,.2f} kg".replace(
-                    ",", " "
-                ).replace(".", ",")
-            ),
-            "Różnica ilościowa": (
-                f"{(cur_weight - st.session_state.avg_weight_12m):+,.2f}"
-                " kg".replace(",", " ").replace(".", ",")
-            ),
-            "Odchylenie procentowe (%)": f"{dev_weight * 100:+.2f}%".replace(
-                ".", ","
-            ),
-            "Waga wskaźnika": f"{st.session_state.w_weight:.2f}%".replace(
-                ".", ","
-            ),
+            "Parametr produkcyjny": "Waga towaru (kg)",
+            "Wartość w miesiącu": cur_weight,
+            "Średnia roczna (baza)": st.session_state.avg_weight_12m,
+            "Różnica ilościowa": cur_weight - st.session_state.avg_weight_12m,
+            "Odchylenie procentowe (%)": dev_weight * 100,
+            "Waga wskaźnika (%)": st.session_state.w_weight,
         },
     ]
+
     st.dataframe(
         pd.DataFrame(comparison_data),
+        column_config={
+            "Wartość w miesiącu": st.column_config.NumberColumn(
+                format="%.2f"
+            ),
+            "Średnia roczna (baza)": st.column_config.NumberColumn(
+                format="%.2f"
+            ),
+            "Różnica ilościowa": st.column_config.NumberColumn(format="%+.2f"),
+            "Odchylenie procentowe (%)": st.column_config.NumberColumn(
+                format="%+.2f %%"
+            ),
+            "Waga wskaźnika (%)": st.column_config.NumberColumn(
+                format="%.2f %%"
+            ),
+        },
         use_container_width=True,
         hide_index=True,
     )
@@ -1081,20 +1173,16 @@ with tab_calc:
     with col_m3:
       st.metric(
           label="Maks. Premia Bazowa (Magazynier)",
-          value=f"{max_bonus_per_emp:,.2f} zł".replace(",", " ").replace(
-              ".", ","
-          ),
+          value=f"{max_bonus_per_emp:,.2f} zł".replace(".", ","),
       )
 
-    # =========================================================
-    # DZIENNA ANALIZA PRZYJĘĆ I NAKŁADU PRACY
-    # =========================================================
+    # DZIENNA ANALIZA
     st.markdown("---")
     st.subheader(
         "📅 2. Dzienna Analiza Przyjęć i Rozkład Pracy (% Miesiąca)"
     )
 
-    daily_map = parse_daily_production(prod_df, gen_year, gen_month_idx)
+    daily_map = parse_daily_production_cached(prod_df, gen_year, gen_month_idx)
     days_in_month = calendar.monthrange(gen_year, gen_month_idx)[1]
 
     daily_rows = []
@@ -1125,13 +1213,13 @@ with tab_calc:
       daily_rows.append({
           "Data": date_str,
           "Dzień tygodnia": day_name,
-          "Sztuki": f"{pcs_d:,.0f}".replace(",", " "),
-          "Pozycje": f"{lines_d:,.0f}".replace(",", " "),
-          "Waga (kg)": f"{weight_d:,.2f}".replace(",", " ").replace(".", ","),
-          "% Sztuk": f"{pct_pcs_d:.2f}%".replace(".", ","),
-          "% Pozycji": f"{pct_lines_d:.2f}%".replace(".", ","),
-          "% Wagi": f"{pct_weight_d:.2f}%".replace(".", ","),
-          "% Pracy w miesiącu": f"{pct_work_d:.2f}%".replace(".", ","),
+          "Sztuki": pcs_d,
+          "Pozycje": lines_d,
+          "Waga (kg)": weight_d,
+          "% Sztuk": pct_pcs_d,
+          "% Pozycji": pct_lines_d,
+          "% Wagi": pct_weight_d,
+          "% Pracy w miesiącu": pct_work_d,
       })
 
       daily_chart_data.append({
@@ -1139,8 +1227,22 @@ with tab_calc:
           "% Pracy": round(pct_work_d, 2),
       })
 
-    daily_df = pd.DataFrame(daily_rows)
-    st.dataframe(daily_df, use_container_width=True, hide_index=True)
+    st.dataframe(
+        pd.DataFrame(daily_rows),
+        column_config={
+            "Sztuki": st.column_config.NumberColumn(format="%.0f"),
+            "Pozycje": st.column_config.NumberColumn(format="%.0f"),
+            "Waga (kg)": st.column_config.NumberColumn(format="%.2f"),
+            "% Sztuk": st.column_config.NumberColumn(format="%.2f %%"),
+            "% Pozycji": st.column_config.NumberColumn(format="%.2f %%"),
+            "% Wagi": st.column_config.NumberColumn(format="%.2f %%"),
+            "% Pracy w miesiącu": st.column_config.NumberColumn(
+                format="%.2f %%"
+            ),
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
 
     if cur_pcs > 0 or cur_lines > 0 or cur_weight > 0:
       fig_daily = px.bar(
@@ -1157,275 +1259,165 @@ with tab_calc:
       fig_daily.update_traces(marker_color="#1e3a8a")
       st.plotly_chart(fig_daily, use_container_width=True)
 
-    # =========================================================
-    # EWIDENCJA OBSŁUGI WÓZKA WIDŁOWEGO (KSIĄŻKA OBSŁUGI)
-    # =========================================================
+    # EWIDENCJA WÓZKA
     st.markdown("---")
-    st.subheader(
-        "🚜 3. Ewidencja Czasu Pracy na Wózku Widłowym (z Książki Obsługi)"
+    with st.container(border=True):
+      st.subheader(
+          "🚜 3. Ewidencja Czasu Pracy na Wózku Widłowym (z Książki Obsługi)"
+      )
+      st.markdown(
+          "Wpisz poniżej liczbę godzin obsługi wózka dla każdego z pracowników."
+          " System automatycznie policzy 100% czasu pracy wózka i podzieli"
+          f" zbiorczą pulę **{st.session_state.forklift_pool:,.2f} zł netto**."
+      )
+
+      forklift_editor_df = st.data_editor(
+          st.session_state.employees_df[["OSOBA", "CZAS WÓZKA (godz.)"]],
+          column_config={
+              "OSOBA": st.column_config.TextColumn("Pracownik", disabled=True),
+              "CZAS WÓZKA (godz.)": st.column_config.NumberColumn(
+                  "Liczba godzin na wózku (h)",
+                  min_value=0.0,
+                  max_value=300.0,
+                  step=0.5,
+              ),
+          },
+          use_container_width=True,
+          hide_index=True,
+          key="forklift_hours_editor",
+      )
+
+      if isinstance(forklift_editor_df, pd.DataFrame):
+        st.session_state.employees_df["CZAS WÓZKA (godz.)"] = (
+            forklift_editor_df["CZAS WÓZKA (godz.)"]
+        )
+
+      total_forklift_hours = st.session_state.employees_df[
+          "CZAS WÓZKA (godz.)"
+      ].sum()
+
+      col_fk1, col_fk2 = st.columns(2)
+      with col_fk1:
+        st.metric(
+            label="Łączny Czas Obsługi Wózka w Zespole (100%)",
+            value=f"{total_forklift_hours:.1f} godz.",
+        )
+      with col_fk2:
+        st.metric(
+            label="Zbiorcza Pula za Wózki do Podziału",
+            value=f"{st.session_state.forklift_pool:,.2f} zł netto",
+        )
+
+    # PODZIAŁ PALET
+    st.markdown("---")
+    with st.container(border=True):
+      st.subheader("📦 4. Podział Premii za Rozładunki / Załadunki Palet")
+
+      unique_emps = (
+          st.session_state.employees_df["OSOBA"].dropna().unique().tolist()
+      )
+
+      col_pal1, col_pal2, col_pal3 = st.columns(3)
+      with col_pal1:
+        manual_pallets = st.number_input(
+            "Liczba palet w miesiącu:",
+            value=float(cur_pallets),
+            min_value=0.0,
+            step=1.0,
+        )
+
+      total_pallet_pool = manual_pallets * st.session_state.rate_pallet
+
+      with col_pal2:
+        st.metric(
+            label="Łączna Pula za Palety (netto)",
+            value=f"{total_pallet_pool:,.2f} zł",
+        )
+      with col_pal3:
+        st.metric(
+            label="Stawka za 1 szt. palety",
+            value=f"{st.session_state.rate_pallet:,.2f} zł",
+        )
+
+      selected_pallet_emps = st.multiselect(
+          "Zaznacz pracowników uwzględnionych w podziale premii za palety:",
+          options=unique_emps,
+          default=unique_emps,
+          key="pallet_emp_multiselect",
+      )
+
+      num_selected_pallet_emps = len(selected_pallet_emps)
+      pallet_pay_per_selected_emp = (
+          (total_pallet_pool / num_selected_pallet_emps)
+          if num_selected_pallet_emps > 0
+          else 0.0
+      )
+
+      if num_selected_pallet_emps > 0:
+        st.success(
+            f"Pula **{total_pallet_pool:,.2f} zł** dzielona jest na"
+            f" **{num_selected_pallet_emps}** wybranych pracowników ("
+            f"**{pallet_pay_per_selected_emp:,.2f} zł netto** na osobę)."
+        )
+      else:
+        st.warning(
+            "Nie zaznaczono żadnego pracownika do podziału premii za palety."
+        )
+
+    # OBLICZENIA I PODSUMOWANIE ZESPOŁU
+    summary_df, emp_details_map = calculate_payroll(
+        df_sched=df_sched,
+        employees_df=st.session_state.employees_df,
+        max_bonus_per_emp=max_bonus_per_emp,
+        total_forklift_hours=total_forklift_hours,
+        pallet_pay_per_selected_emp=pallet_pay_per_selected_emp,
+        selected_pallet_emps=selected_pallet_emps,
+        daily_work_pct_map=daily_work_pct_map,
     )
 
-    st.markdown(
-        "Wpisz poniżej liczbę godzin obsługi wózka dla każdego z pracowników."
-        " System automatycznie policzy 100% czasu pracy wózka i podzieli"
-        f" zbiorczą pulę **{st.session_state.forklift_pool:,.2f} zł netto**."
-    )
+    st.markdown("---")
+    st.subheader("👥 5. Szczegółowe Rozliczenie Pracowników")
 
-    forklift_editor_df = st.data_editor(
-        st.session_state.employees_df[["OSOBA", "CZAS WÓZKA (godz.)"]],
+    col_tot1, col_tot2, col_tot3 = st.columns(3)
+    with col_tot1:
+      st.metric(
+          label="Łączna Kwota Wypłat i Dodatków",
+          value=f"{summary_df['ŁĄCZNA PREMIA / DODATKI (zł)'].sum():,.2f} zł",
+      )
+    with col_tot2:
+      st.metric(
+          label="Suma Nadgodzin Zespołu",
+          value=f"{summary_df['Nadgodziny (godz.)'].sum():,.1f} h",
+      )
+    with col_tot3:
+      st.metric(
+          label="Wykorzystanie Puli Wózków",
+          value=f"{summary_df['Dodatek Wózek (zł)'].sum():,.2f} zł",
+      )
+
+    st.dataframe(
+        summary_df,
         column_config={
-            "OSOBA": st.column_config.TextColumn("Pracownik", disabled=True),
-            "CZAS WÓZKA (godz.)": st.column_config.NumberColumn(
-                "Liczba godzin na wózku (h)",
-                min_value=0.0,
-                max_value=300.0,
-                step=0.5,
+            "% Potrącenia": st.column_config.NumberColumn(format="%.2f %%"),
+            "% Udział wózek": st.column_config.NumberColumn(format="%.2f %%"),
+            "Dodatek Wózek (zł)": st.column_config.NumberColumn(
+                format="%.2f zł"
+            ),
+            "Dodatek Palety (zł)": st.column_config.NumberColumn(
+                format="%.2f zł"
+            ),
+            "Nadgodziny (zł)": st.column_config.NumberColumn(format="%.2f zł"),
+            "Premia (zł)": st.column_config.NumberColumn(format="%.2f zł"),
+            "Premia Specjalna (zł)": st.column_config.NumberColumn(
+                format="%.2f zł"
+            ),
+            "ŁĄCZNA PREMIA / DODATKI (zł)": st.column_config.NumberColumn(
+                format="%.2f zł"
             ),
         },
         use_container_width=True,
         hide_index=True,
-        key="forklift_hours_editor",
     )
-
-    if isinstance(forklift_editor_df, pd.DataFrame):
-      st.session_state.employees_df["CZAS WÓZKA (godz.)"] = forklift_editor_df[
-          "CZAS WÓZKA (godz.)"
-      ]
-
-    total_forklift_hours = st.session_state.employees_df[
-        "CZAS WÓZKA (godz.)"
-    ].sum()
-
-    col_fk1, col_fk2 = st.columns(2)
-    with col_fk1:
-      st.metric(
-          label="Łączny Czas Obsługi Wózka w Zespole (100%)",
-          value=f"{total_forklift_hours:.1f} godz.",
-      )
-    with col_fk2:
-      st.metric(
-          label="Zbiorcza Pula za Wózki do Podziału",
-          value=f"{st.session_state.forklift_pool:,.2f} zł netto".replace(
-              ",", " "
-          ).replace(".", ","),
-      )
-
-    # =========================================================
-    # PODZIAŁ PREMII ZA PALETY (NOWY ROZBUDOWANY PANEL)
-    # =========================================================
-    st.markdown("---")
-    st.subheader("📦 4. Podział Premii za Rozładunki / Załadunki Palet")
-
-    unique_emps = (
-        st.session_state.employees_df["OSOBA"].dropna().unique().tolist()
-    )
-
-    col_pal1, col_pal2, col_pal3 = st.columns(3)
-    with col_pal1:
-      manual_pallets = st.number_input(
-          "Liczba palet w miesiącu:",
-          value=float(cur_pallets),
-          min_value=0.0,
-          step=1.0,
-          help=(
-              "Wpisz łączną liczbę palet za dany miesiąc. Wartość jest mnożona"
-              f" przez {st.session_state.rate_pallet:.2f} zł netto."
-          ),
-      )
-
-    total_pallet_pool = manual_pallets * st.session_state.rate_pallet
-
-    with col_pal2:
-      st.metric(
-          label="Łączna Pula za Palety (netto)",
-          value=f"{total_pallet_pool:,.2f} zł".replace(",", " ").replace(
-              ".", ","
-          ),
-      )
-    with col_pal3:
-      st.metric(
-          label="Stawka za 1 szt. palety",
-          value=f"{st.session_state.rate_pallet:,.2f} zł".replace(".", ","),
-      )
-
-    selected_pallet_emps = st.multiselect(
-        "Zaznacz pracowników uwzględnionych w podziale premii za palety:",
-        options=unique_emps,
-        default=unique_emps,
-        key="pallet_emp_multiselect",
-    )
-
-    num_selected_pallet_emps = len(selected_pallet_emps)
-    pallet_pay_per_selected_emp = (
-        (total_pallet_pool / num_selected_pallet_emps)
-        if num_selected_pallet_emps > 0
-        else 0.0
-    )
-
-    if num_selected_pallet_emps > 0:
-      st.success(
-          f"Pula **{total_pallet_pool:,.2f} zł** dzielona jest na"
-          f" **{num_selected_pallet_emps}** wybranych pracowników ("
-          f"**{pallet_pay_per_selected_emp:,.2f} zł netto** na osobę)."
-          .replace(",", " ")
-          .replace(".", ",")
-      )
-    else:
-      st.warning(
-          "Nie zaznaczono żadnego pracownika do podziału premii za palety."
-      )
-
-    # =========================================================
-    # SZCZEGÓŁOWE ROZLICZENIE PRACOWNIKÓW
-    # =========================================================
-    st.markdown("---")
-    st.subheader("👥 5. Szczegółowe Rozliczenie Pracowników")
-
-    emp_summary = []
-    emp_details_map = {}
-
-    for emp_name in unique_emps:
-      emp_df = df_sched[
-          df_sched["OSOBA"].str.strip().str.upper()
-          == str(emp_name).strip().upper()
-      ]
-      emp_info_matches = st.session_state.employees_df[
-          st.session_state.employees_df["OSOBA"] == emp_name
-      ]
-      emp_info = (
-          emp_info_matches.iloc[0] if not emp_info_matches.empty else {}
-      )
-
-      position = emp_info.get("STANOWISKO", "MAGAZYNIER")
-      func = emp_info.get("FUNKCJA", "")
-      emp_forklift_hours = float(emp_info.get("CZAS WÓZKA (godz.)", 0.0))
-
-      days_worked = len(
-          emp_df[
-              (emp_df["DZIEŃ PRACUJĄCY/WOLNY"] == "Pracujący")
-              & (emp_df["NIEOBECNOŚĆ"].isin(["Brak", "", "None"]))
-          ]
-      )
-
-      absent_rows = emp_df[~emp_df["NIEOBECNOŚĆ"].isin(["Brak", "", "None"])]
-      absent_days = len(absent_rows)
-      total_ot = emp_df["NADGODZINY (godz.)"].sum()
-
-      ot_rate = st.session_state.ot_magazynier
-      if "KIEROWNIK" in str(position).upper():
-        ot_rate = st.session_state.ot_kierownik
-      elif "BRYGADZISTA" in str(position).upper():
-        ot_rate = st.session_state.ot_brygadzista
-
-      ot_pay = total_ot * ot_rate
-
-      scheduled_work_days = len(
-          emp_df[emp_df["DZIEŃ PRACUJĄCY/WOLNY"] == "Pracujący"]
-      )
-      attendance_ratio = (
-          (days_worked / scheduled_work_days)
-          if scheduled_work_days > 0
-          else 0.0
-      )
-
-      deduction_pct = (1.0 - attendance_ratio) * 100.0
-
-      base_emp_bonus = max_bonus_per_emp
-      is_kierownik = (
-          "KIEROWNIK" in str(position).upper()
-          or "KIEROWNIK" in str(func).upper()
-      )
-      if is_kierownik:
-        base_emp_bonus *= st.session_state.kierownik_bonus_multiplier
-
-      calculated_bonus = base_emp_bonus * attendance_ratio
-
-      # Naliczenie Wózka Widłowego
-      emp_forklift_pct = (
-          (emp_forklift_hours / total_forklift_hours * 100.0)
-          if total_forklift_hours > 0
-          else 0.0
-      )
-      forklift_pay = (
-          (st.session_state.forklift_pool * (emp_forklift_pct / 100.0))
-          if total_forklift_hours > 0
-          else 0.0
-      )
-
-      # Naliczenie Palet
-      pallet_pay = (
-          pallet_pay_per_selected_emp
-          if emp_name in selected_pallet_emps
-          else 0.0
-      )
-
-      spec_bonus_val = 0.0
-      if not st.session_state.special_bonuses_df.empty:
-        matched_spec = st.session_state.special_bonuses_df[
-            st.session_state.special_bonuses_df["Pracownik"].apply(
-                normalize_name
-            )
-            == normalize_name(emp_name)
-        ]
-        spec_bonus_val = matched_spec["Kwota netto premii"].sum()
-
-      total_payout = (
-          calculated_bonus + ot_pay + spec_bonus_val + forklift_pay + pallet_pay
-      )
-
-      absences_list = []
-      for _, abs_r in absent_rows.iterrows():
-        try:
-          day_n = int(str(abs_r["DATA"]).split(".")[0])
-        except Exception:
-          day_n = 1
-        day_work_pct = daily_work_pct_map.get(day_n, 0.0)
-
-        absences_list.append({
-            "Data": abs_r["DATA"],
-            "Dzień tygodnia": abs_r["DZIEŃ TYGODNIA"],
-            "Rodzaj nieobecności": abs_r["NIEOBECNOŚĆ"],
-            "Udział pracy w miesiącu (%)": (
-                f"{day_work_pct:.2f}%".replace(".", ",")
-            ),
-        })
-
-      emp_summary.append({
-          "Pracownik": emp_name,
-          "Stanowisko": position,
-          "Dni przepracowane": days_worked,
-          "Dni nieobecności": absent_days,
-          "% Potrącenia": f"{deduction_pct:.2f}%".replace(".", ","),
-          "Czas wózka (h)": emp_forklift_hours,
-          "Dodatek Wózek (zł)": round(forklift_pay, 2),
-          "Dodatek Palety (zł)": round(pallet_pay, 2),
-          "Nadgodziny (zł)": round(ot_pay, 2),
-          "Premia (zł)": round(calculated_bonus, 2),
-          "Premia Specjalna (zł)": round(spec_bonus_val, 2),
-          "ŁĄCZNA PREMIA / DODATKI (zł)": round(total_payout, 2),
-      })
-
-      emp_details_map[emp_name] = {
-          "position": position,
-          "emp_forklift_hours": emp_forklift_hours,
-          "emp_forklift_pct": emp_forklift_pct,
-          "forklift_pay": forklift_pay,
-          "pallet_pay": pallet_pay,
-          "days_worked": days_worked,
-          "scheduled_days": scheduled_work_days,
-          "absent_days": absent_days,
-          "deduction_pct": deduction_pct,
-          "base_emp_bonus": base_emp_bonus,
-          "calculated_bonus": calculated_bonus,
-          "total_ot": total_ot,
-          "ot_pay": ot_pay,
-          "spec_bonus_val": spec_bonus_val,
-          "total_payout": total_payout,
-          "absences_table": pd.DataFrame(absences_list),
-      }
-
-    summary_df = pd.DataFrame(emp_summary)
-    st.dataframe(summary_df, use_container_width=True)
 
     if st.button("💾 Zapisz rozliczenie do Archiwum Historycznego"):
       st.session_state.history_v2[period_key] = {
@@ -1441,18 +1433,16 @@ with tab_calc:
           },
       }
       save_archive(st.session_state.history_v2)
-      st.success(f"Pomyślnie zarchiwizowano rozliczenie za okres {period_key}!")
+      st.success(f"Zarchiwizowano rozliczenie za okres {period_key}!")
 
-    # =========================================================
-    # PASKI DO WYDRUKU DLA PRACOWNIKÓW
-    # =========================================================
+    # PASKI PREMIOWE DO WYDRUKU
     st.markdown("---")
     st.subheader("🧾 6. Imienne Paski Premiowe do Wydruku")
 
     col_print_sel, _ = st.columns([3, 1])
     with col_print_sel:
       selected_slip_emp = st.selectbox(
-          "Wybierz pracownika do wygenerowania paska (lub wybierz wszystkich):",
+          "Wybierz pracownika do wygenerowania paska (lub wszystkich):",
           ["WSZYSCY PRACOWNICY"] + unique_emps,
       )
 
@@ -1490,13 +1480,22 @@ with tab_calc:
           unsafe_allow_html=True,
       )
 
-      st.markdown("**📅 Wykaz Dni Nieobecności i ich Wpływ na Pracę Magazynu:**")
+      st.markdown("**📅 Wykaz Dni Nieobecności:**")
       abs_df_view = e_det["absences_table"]
 
       if abs_df_view.empty:
         st.success("Brak nieobecności w tym miesiącu — 100% frekwencji!")
       else:
-        st.dataframe(abs_df_view, use_container_width=True, hide_index=True)
+        st.dataframe(
+            abs_df_view,
+            column_config={
+                "Udział pracy w miesiącu (%)": st.column_config.NumberColumn(
+                    format="%.2f %%"
+                )
+            },
+            use_container_width=True,
+            hide_index=True,
+        )
 
       st.markdown(
           f"""
@@ -1519,7 +1518,7 @@ with tab_calc:
       )
 
 # ==========================================
-# ZAKŁADKA 3: DASHBOARD I WYKRESY
+# ZAKŁADKA 3: DASHBOARD
 # ==========================================
 with tab_dash:
   st.header("📊 Dashboard Analityczny")
@@ -1535,7 +1534,7 @@ with tab_dash:
           y="ŁĄCZNA PREMIA / DODATKI (zł)",
           title="Łączne wypłaty dodatkowe wg pracowników",
           color="Stanowisko",
-          text_auto=True,
+          text_auto=".2f",
       )
       st.plotly_chart(fig_payout, use_container_width=True)
 
@@ -1550,11 +1549,11 @@ with tab_dash:
   else:
     st.info(
         "Zapisz rozliczenie do archiwum w zakładce Kalkulator Premii, aby"
-        " wyświetlić wykresy dla tego okresu."
+        " wyświetlić wykresy."
     )
 
 # ==========================================
-# ZAKŁADKA 4: ARCHIWUM HISTORYCZNE
+# ZAKŁADKA 4: ARCHIWUM
 # ==========================================
 with tab_history:
   st.header("📁 Archiwum Zapisanych Rozliczeń")
@@ -1572,7 +1571,7 @@ with tab_history:
     st.info("Brak zapisanych okresów w archiwum.")
 
 # ==========================================
-# ZAKŁADKA 5: PORÓWNANIE WYNIKÓW
+# ZAKŁADKA 5: PORÓWNANIE
 # ==========================================
 with tab_comp:
   st.header("📈 Porównanie Okresów Historycznych")
@@ -1598,13 +1597,10 @@ with tab_comp:
       )
       st.dataframe(comp_df, use_container_width=True)
   else:
-    st.info(
-        "Wymagane są co najmniej 2 zapisane okresy w archiwum, aby wykonać"
-        " porównanie."
-    )
+    st.info("Wymagane są co najmniej 2 zapisane okresy w archiwum.")
 
 # ==========================================
-# ZAKŁADKA 6: USTAWIENIA SYSTEMU
+# ZAKŁADKA 6: USTAWIENIA
 # ==========================================
 with tab_settings:
   st.header("⚙️ Ustawienia Parametrów i Stałych Systemowych")
@@ -1612,81 +1608,75 @@ with tab_settings:
   col_set1, col_set2 = st.columns(2)
 
   with col_set1:
-    st.subheader("💰 Podstawa Premiowa, Mnożniki i Pula na Wózki")
-    st.session_state.base_bonus_salary = st.number_input(
-        "Podstawa premii (zł netto):",
-        value=float(st.session_state.base_bonus_salary),
-        step=100.0,
-    )
+    with st.container(border=True):
+      st.subheader("💰 Podstawa Premiowa i Dodatki")
+      st.session_state.base_bonus_salary = st.number_input(
+          "Podstawa premii (zł netto):",
+          value=float(st.session_state.base_bonus_salary),
+          step=100.0,
+      )
+      st.session_state.kierownik_bonus_multiplier = st.number_input(
+          "Mnożnik premii dla Kierownika:",
+          value=float(st.session_state.kierownik_bonus_multiplier),
+          step=0.05,
+          format="%.2f",
+      )
+      st.session_state.forklift_pool = st.number_input(
+          "Zbiorcza pula dodatku za wózek (zł netto):",
+          value=float(st.session_state.forklift_pool),
+          step=50.0,
+      )
+      st.session_state.rate_pallet = st.number_input(
+          "Stawka za 1 szt. palety (zł netto):",
+          value=float(st.session_state.rate_pallet),
+          step=0.5,
+          format="%.2f",
+      )
 
-    st.session_state.kierownik_bonus_multiplier = st.number_input(
-        "Mnożnik premii dla Kierownika Magazynu:",
-        value=float(st.session_state.kierownik_bonus_multiplier),
-        step=0.05,
-        format="%.2f",
-        help="Mnożnik stosowany do wyliczonej premii Kierownika (np. 1.35).",
-    )
-
-    st.session_state.forklift_pool = st.number_input(
-        "Zbiorcza pula dodatku za wózek widłowy na miesiąc (zł netto):",
-        value=float(st.session_state.forklift_pool),
-        step=50.0,
-        help=(
-            "Zbiorcza kwota netto dzielona na pracowników proporcjonalnie do"
-            " czasu obsługi wózka."
-        ),
-    )
-
-    st.session_state.rate_pallet = st.number_input(
-        "Dodatek za rozładunki/załadunki palet (zł netto / 1 szt. palety):",
-        value=float(st.session_state.rate_pallet),
-        step=0.5,
-        format="%.2f",
-        help="Kwota netto za 1 sztukę załadowanej lub rozładowanej palety.",
-    )
-
-    st.subheader("⏱️ Stawki za Nadgodziny (zł/godz.)")
-    st.session_state.ot_kierownik = st.number_input(
-        "Kierownik:", value=float(st.session_state.ot_kierownik), step=5.0
-    )
-    st.session_state.ot_brygadzista = st.number_input(
-        "Brygadzista:", value=float(st.session_state.ot_brygadzista), step=5.0
-    )
-    st.session_state.ot_magazynier = st.number_input(
-        "Magazynier:", value=float(st.session_state.ot_magazynier), step=5.0
-    )
+    with st.container(border=True):
+      st.subheader("⏱️ Stawki za Nadgodziny (zł/h)")
+      st.session_state.ot_kierownik = st.number_input(
+          "Kierownik:", value=float(st.session_state.ot_kierownik), step=5.0
+      )
+      st.session_state.ot_brygadzista = st.number_input(
+          "Brygadzista:", value=float(st.session_state.ot_brygadzista), step=5.0
+      )
+      st.session_state.ot_magazynier = st.number_input(
+          "Magazynier:", value=float(st.session_state.ot_magazynier), step=5.0
+      )
 
   with col_set2:
-    st.subheader("📊 Baza Roczna i Wagi Wskaźników")
-    st.session_state.avg_pcs_12m = st.number_input(
-        "Średnia roczna - Sztuki:",
-        value=float(st.session_state.avg_pcs_12m),
-        step=1000.0,
-    )
-    st.session_state.w_pcs = st.number_input(
-        "Waga - Sztuki (%):", value=float(st.session_state.w_pcs), step=1.0
-    )
+    with st.container(border=True):
+      st.subheader("📊 Średnie Roczne i Wagi")
+      st.session_state.avg_pcs_12m = st.number_input(
+          "Średnia roczna - Sztuki:",
+          value=float(st.session_state.avg_pcs_12m),
+          step=1000.0,
+      )
+      st.session_state.w_pcs = st.number_input(
+          "Waga - Sztuki (%):", value=float(st.session_state.w_pcs), step=1.0
+      )
 
-    st.session_state.avg_lines_12m = st.number_input(
-        "Średnia roczna - Pozycje:",
-        value=float(st.session_state.avg_lines_12m),
-        step=500.0,
-    )
-    st.session_state.w_lines = st.number_input(
-        "Waga - Pozycje (%):", value=float(st.session_state.w_lines), step=1.0
-    )
+      st.session_state.avg_lines_12m = st.number_input(
+          "Średnia roczna - Pozycje:",
+          value=float(st.session_state.avg_lines_12m),
+          step=500.0,
+      )
+      st.session_state.w_lines = st.number_input(
+          "Waga - Pozycje (%):", value=float(st.session_state.w_lines), step=1.0
+      )
 
-    st.session_state.avg_weight_12m = st.number_input(
-        "Średnia roczna - Waga (kg):",
-        value=float(st.session_state.avg_weight_12m),
-        step=1000.0,
-    )
-    st.session_state.w_weight = st.number_input(
-        "Waga - Waga (%):", value=float(st.session_state.w_weight), step=1.0
-    )
+      st.session_state.avg_weight_12m = st.number_input(
+          "Średnia roczna - Waga (kg):",
+          value=float(st.session_state.avg_weight_12m),
+          step=1000.0,
+      )
+      st.session_state.w_weight = st.number_input(
+          "Waga - Waga (%):", value=float(st.session_state.w_weight), step=1.0
+      )
 
   st.markdown("---")
-  st.subheader("👥 Lista Pracowników i Zespołów")
+  st.subheader("👥 Zespół i Pracownicy")
   edited_employees = st.data_editor(
       st.session_state.employees_df,
       use_container_width=True,
