@@ -16,7 +16,7 @@ import streamlit as st
 # KONFIGURACJA I STYLIZACJA CSS
 # ==========================================
 st.set_page_config(
-    page_title="System Rozliczania Harmonogramów v2.3",
+    page_title="System Rozliczania Harmonogramów v2.4",
     layout="wide",
     page_icon="📈",
 )
@@ -1272,7 +1272,7 @@ with tab_calc:
             "Pozycje": st.column_config.NumberColumn(format="%.0f"),
             "Waga (kg)": st.column_config.NumberColumn(format="%.2f"),
             "% Sztuk": st.column_config.NumberColumn(format="%.2f %%"),
-            "% Pozycje": st.column_config.NumberColumn(format="%.2f %%"),
+            "% Pozycji": st.column_config.NumberColumn(format="%.2f %%"),
             "% Wagi": st.column_config.NumberColumn(format="%.2f %%"),
             "% Pracy w miesiącu": st.column_config.NumberColumn(
                 format="%.2f %%"
@@ -1529,22 +1529,44 @@ with tab_calc:
         hide_index=True,
     )
 
-    if st.button("💾 Zapisz rozliczenie do Archiwum Historycznego"):
-      st.session_state.history_v2[period_key] = {
-          "summary": summary_df,
-          "schedule": df_sched,
-          "metrics": {
-              "pcs": cur_pcs,
-              "lines": cur_lines,
-              "weight": cur_weight,
-              "pallets": manual_pallets,
-              "indicator": indicator,
-              "bonus_rate": bonus_rate,
-              "variant": selected_variant,
-          },
-      }
-      save_archive(st.session_state.history_v2)
-      st.success(f"Zarchiwizowano rozliczenie za okres {period_key}!")
+    col_save1, col_save2 = st.columns(2)
+
+    with col_save1:
+      if st.button(
+          "💾 Zapisz rozliczenie do Archiwum Historycznego",
+          use_container_width=True,
+      ):
+        st.session_state.history_v2[period_key] = {
+            "summary": summary_df,
+            "schedule": df_sched,
+            "metrics": {
+                "pcs": cur_pcs,
+                "lines": cur_lines,
+                "weight": cur_weight,
+                "pallets": manual_pallets,
+                "indicator": indicator,
+                "bonus_rate": bonus_rate,
+                "variant": selected_variant,
+            },
+        }
+        save_archive(st.session_state.history_v2)
+        st.success(f"Zarchiwizowano rozliczenie za okres {period_key}!")
+
+    with col_save2:
+      hr_buffer = io.BytesIO()
+      with pd.ExcelWriter(hr_buffer, engine="openpyxl") as writer:
+        summary_df.to_excel(writer, index=False, sheet_name="Rozliczenie_HR")
+      hr_buffer.seek(0)
+
+      st.download_button(
+          label="📊 Pobierz Rozliczenie dla HR (Excel)",
+          data=hr_buffer,
+          file_name=f"Rozliczenie_HR_{period_key.replace(' ', '_')}.xlsx",
+          mime=(
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          ),
+          use_container_width=True,
+      )
 
     # PASKI PREMIOWE DO WYDRUKU
     st.markdown("---")
