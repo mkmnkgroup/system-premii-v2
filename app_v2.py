@@ -16,7 +16,7 @@ import streamlit as st
 # KONFIGURACJA I STYLIZACJA CSS
 # ==========================================
 st.set_page_config(
-    page_title="System Rozliczania Harmonogramów v2.1",
+    page_title="System Rozliczania Harmonogramów v2.2",
     layout="wide",
     page_icon="📈",
 )
@@ -246,7 +246,7 @@ DEFAULT_EMPLOYEES = [
         "SYSTEM": "WTOREK-SOBOTA",
         "STANOWISKO": "MAGAZYNIER",
         "FUNKCJA": "1 SKANOWANIE",
-        "CZAS WÓZKA (godz.)": 35.0,
+        "UPRAWNIENIA UDT": True,
     },
     {
         "OSOBA": "ANTON FEDOSOV",
@@ -254,7 +254,7 @@ DEFAULT_EMPLOYEES = [
         "SYSTEM": "PONIEDZIAŁEK-PIĄTEK",
         "STANOWISKO": "MAGAZYNIER",
         "FUNKCJA": "1 SKANOWANIE",
-        "CZAS WÓZKA (godz.)": 0.0,
+        "UPRAWNIENIA UDT": False,
     },
     {
         "OSOBA": "JAKUB JANECZEK",
@@ -262,7 +262,7 @@ DEFAULT_EMPLOYEES = [
         "SYSTEM": "PONIEDZIAŁEK-PIĄTEK",
         "STANOWISKO": "BRYGADZISTA",
         "FUNKCJA": "2 SKANOWANIE",
-        "CZAS WÓZKA (godz.)": 0.0,
+        "UPRAWNIENIA UDT": False,
     },
     {
         "OSOBA": "JAKUB RĘBACZ",
@@ -270,7 +270,7 @@ DEFAULT_EMPLOYEES = [
         "SYSTEM": "WTOREK-SOBOTA",
         "STANOWISKO": "MAGAZYNIER",
         "FUNKCJA": "1 SKANOWANIE",
-        "CZAS WÓZKA (godz.)": 0.0,
+        "UPRAWNIENIA UDT": False,
     },
     {
         "OSOBA": "KYRYLO BZHEZITSKYI",
@@ -278,7 +278,7 @@ DEFAULT_EMPLOYEES = [
         "SYSTEM": "WTOREK-SOBOTA",
         "STANOWISKO": "BRYGADZISTA",
         "FUNKCJA": "1 SKANOWANIE",
-        "CZAS WÓZKA (godz.)": 45.0,
+        "UPRAWNIENIA UDT": True,
     },
     {
         "OSOBA": "MACIEJ BORZĘCKI",
@@ -286,7 +286,7 @@ DEFAULT_EMPLOYEES = [
         "SYSTEM": "WTOREK-SOBOTA",
         "STANOWISKO": "MAGAZYNIER",
         "FUNKCJA": "1 SKANOWANIE",
-        "CZAS WÓZKA (godz.)": 0.0,
+        "UPRAWNIENIA UDT": False,
     },
     {
         "OSOBA": "MICHAŁ KWIATKOWSKI",
@@ -294,7 +294,7 @@ DEFAULT_EMPLOYEES = [
         "SYSTEM": "PONIEDZIAŁEK-PIĄTEK",
         "STANOWISKO": "KIEROWNIK",
         "FUNKCJA": "KIEROWNIK",
-        "CZAS WÓZKA (godz.)": 0.0,
+        "UPRAWNIENIA UDT": False,
     },
     {
         "OSOBA": "VADZIM KARPUK",
@@ -302,7 +302,7 @@ DEFAULT_EMPLOYEES = [
         "SYSTEM": "WTOREK-SOBOTA",
         "STANOWISKO": "MAGAZYNIER",
         "FUNKCJA": "1 SKANOWANIE",
-        "CZAS WÓZKA (godz.)": 20.0,
+        "UPRAWNIENIA UDT": True,
     },
     {
         "OSOBA": "WOJTEK SZYMAŃSKI",
@@ -310,7 +310,7 @@ DEFAULT_EMPLOYEES = [
         "SYSTEM": "PONIEDZIAŁEK-PIĄTEK",
         "STANOWISKO": "MAGAZYNIER",
         "FUNKCJA": "2 SKANOWANIE",
-        "CZAS WÓZKA (godz.)": 0.0,
+        "UPRAWNIENIA UDT": False,
     },
 ]
 
@@ -340,10 +340,15 @@ if "special_bonuses_df" not in st.session_state:
       columns=[
           "Pracownik",
           "Kwota netto premii",
-          "Kto przyznał",
           "Powód przyznania premii",
+          "Kto przyznał",
       ]
   )
+if "forklift_hours_df" not in st.session_state:
+  st.session_state.forklift_hours_df = pd.DataFrame([
+      {"OSOBA": emp["OSOBA"], "CZAS WÓZKA (godz.)": 0.0}
+      for emp in DEFAULT_EMPLOYEES
+  ])
 if "imported_absences_df" not in st.session_state:
   st.session_state.imported_absences_df = pd.DataFrame()
 if "gemini_api_key" not in st.session_state:
@@ -541,14 +546,25 @@ def calculate_payroll(
     df_sched,
     employees_df,
     max_bonus_per_emp,
+    forklift_hours_df,
     total_forklift_hours,
     pallet_pay_per_selected_emp,
     selected_pallet_emps,
     daily_work_pct_map,
+    special_bonuses_df,
 ):
   emp_summary = []
   emp_details_map = {}
   unique_emps = employees_df["OSOBA"].dropna().unique().tolist()
+
+  fk_dict = dict(
+      zip(
+          forklift_hours_df["OSOBA"],
+          pd.to_numeric(
+              forklift_hours_df["CZAS WÓZKA (godz.)"], errors="coerce"
+          ).fillna(0.0),
+      )
+  )
 
   for emp_name in unique_emps:
     emp_df = df_sched[
@@ -560,7 +576,7 @@ def calculate_payroll(
 
     position = emp_info.get("STANOWISKO", "MAGAZYNIER")
     func = emp_info.get("FUNKCJA", "")
-    emp_forklift_hours = float(emp_info.get("CZAS WÓZKA (godz.)", 0.0))
+    emp_forklift_hours = float(fk_dict.get(emp_name, 0.0))
 
     days_worked = len(
         emp_df[
@@ -607,15 +623,30 @@ def calculate_payroll(
         pallet_pay_per_selected_emp if emp_name in selected_pallet_emps else 0.0
     )
 
+    # Naliczenie Premii Specjalnej
     spec_bonus_val = 0.0
-    if not st.session_state.special_bonuses_df.empty:
-      matched_spec = st.session_state.special_bonuses_df[
-          st.session_state.special_bonuses_df["Pracownik"].apply(
-              normalize_name
-          )
-          == normalize_name(emp_name)
+    spec_reasons_list = []
+    if (
+        not special_bonuses_df.empty
+        and "Pracownik" in special_bonuses_df.columns
+    ):
+      spec_df = special_bonuses_df.copy()
+      spec_df["Kwota netto premii"] = pd.to_numeric(
+          spec_df["Kwota netto premii"], errors="coerce"
+      ).fillna(0.0)
+      matched_spec = spec_df[
+          spec_df["Pracownik"].apply(normalize_name) == normalize_name(emp_name)
       ]
       spec_bonus_val = matched_spec["Kwota netto premii"].sum()
+      for _, s_row in matched_spec.iterrows():
+        r_txt = str(s_row.get("Powód przyznania premii", "")).strip()
+        k_txt = str(s_row.get("Kto przyznał", "")).strip()
+        q_val = float(s_row.get("Kwota netto premii", 0.0))
+        if q_val > 0:
+          spec_reasons_list.append(
+              f"{q_val:,.2f} zł — {r_txt}"
+              + (f" (przyznał: {k_txt})" if k_txt else "")
+          )
 
     total_payout = (
         calculated_bonus + ot_pay + spec_bonus_val + forklift_pay + pallet_pay
@@ -668,6 +699,7 @@ def calculate_payroll(
         "total_ot": total_ot,
         "ot_pay": ot_pay,
         "spec_bonus_val": spec_bonus_val,
+        "spec_reasons_list": spec_reasons_list,
         "total_payout": total_payout,
         "absences_table": pd.DataFrame(absences_list),
     }
@@ -1266,15 +1298,26 @@ with tab_calc:
           "🚜 3. Ewidencja Czasu Pracy na Wózku Widłowym (z Książki Obsługi)"
       )
       st.markdown(
-          "Wpisz poniżej liczbę godzin obsługi wózka dla każdego z pracowników."
-          " System automatycznie policzy 100% czasu pracy wózka i podzieli"
-          f" zbiorczą pulę **{st.session_state.forklift_pool:,.2f} zł netto**."
+          "Wpisz poniżej liczbę godzin obsługi wózka dla każdego z pracowników"
+          " w tym miesiącu. System automatycznie wyliczy 100% czasu obsługi"
+          f" w zespole i podzieli pulę **{st.session_state.forklift_pool:,.2f}"
+          " zł netto**."
       )
 
+      emp_list_df = st.session_state.employees_df[
+          ["OSOBA", "UPRAWNIENIA UDT"]
+      ].copy()
+      merged_forklift = pd.merge(
+          emp_list_df, st.session_state.forklift_hours_df, on="OSOBA", how="left"
+      ).fillna({"CZAS WÓZKA (godz.)": 0.0})
+
       forklift_editor_df = st.data_editor(
-          st.session_state.employees_df[["OSOBA", "CZAS WÓZKA (godz.)"]],
+          merged_forklift,
           column_config={
               "OSOBA": st.column_config.TextColumn("Pracownik", disabled=True),
+              "UPRAWNIENIA UDT": st.column_config.CheckboxColumn(
+                  "Uprawnienia UDT", disabled=True
+              ),
               "CZAS WÓZKA (godz.)": st.column_config.NumberColumn(
                   "Liczba godzin na wózku (h)",
                   min_value=0.0,
@@ -1288,13 +1331,14 @@ with tab_calc:
       )
 
       if isinstance(forklift_editor_df, pd.DataFrame):
-        st.session_state.employees_df["CZAS WÓZKA (godz.)"] = (
-            forklift_editor_df["CZAS WÓZKA (godz.)"]
-        )
+        st.session_state.forklift_hours_df = forklift_editor_df[
+            ["OSOBA", "CZAS WÓZKA (godz.)"]
+        ]
 
-      total_forklift_hours = st.session_state.employees_df[
-          "CZAS WÓZKA (godz.)"
-      ].sum()
+      total_forklift_hours = pd.to_numeric(
+          st.session_state.forklift_hours_df["CZAS WÓZKA (godz.)"],
+          errors="coerce",
+      ).sum()
 
       col_fk1, col_fk2 = st.columns(2)
       with col_fk1:
@@ -1364,19 +1408,57 @@ with tab_calc:
             "Nie zaznaczono żadnego pracownika do podziału premii za palety."
         )
 
+    # PREMIA SPECJALNA / UZNANIOWA
+    st.markdown("---")
+    with st.container(border=True):
+      st.subheader("⭐ 5. Premie Specjalne i Uznaniowe")
+      st.markdown(
+          "Wprowadź poniżej ewentualne dodatkowe premie specjalne przyznane"
+          " pracownikom w danym miesiącu. Możesz dodawać dowolną liczbę"
+          " wierszy."
+      )
+
+      edited_spec_bonuses = st.data_editor(
+          st.session_state.special_bonuses_df,
+          column_config={
+              "Pracownik": st.column_config.SelectboxColumn(
+                  "Pracownik", options=unique_emps, required=True
+              ),
+              "Kwota netto premii": st.column_config.NumberColumn(
+                  "Kwota netto (zł)",
+                  min_value=0.0,
+                  step=50.0,
+                  format="%.2f zł",
+              ),
+              "Powód przyznania premii": st.column_config.TextColumn(
+                  "Za co przyznana / Powód"
+              ),
+              "Kto przyznał": st.column_config.TextColumn("Kto przyznał"),
+          },
+          num_rows="dynamic",
+          use_container_width=True,
+          hide_index=True,
+          key="special_bonuses_editor",
+      )
+
+      if isinstance(edited_spec_bonuses, pd.DataFrame):
+        st.session_state.special_bonuses_df = edited_spec_bonuses
+
     # OBLICZENIA I PODSUMOWANIE ZESPOŁU
     summary_df, emp_details_map = calculate_payroll(
         df_sched=df_sched,
         employees_df=st.session_state.employees_df,
         max_bonus_per_emp=max_bonus_per_emp,
+        forklift_hours_df=st.session_state.forklift_hours_df,
         total_forklift_hours=total_forklift_hours,
         pallet_pay_per_selected_emp=pallet_pay_per_selected_emp,
         selected_pallet_emps=selected_pallet_emps,
         daily_work_pct_map=daily_work_pct_map,
+        special_bonuses_df=st.session_state.special_bonuses_df,
     )
 
     st.markdown("---")
-    st.subheader("👥 5. Szczegółowe Rozliczenie Pracowników")
+    st.subheader("👥 6. Szczegółowe Rozliczenie Pracowników")
 
     col_tot1, col_tot2, col_tot3 = st.columns(3)
     with col_tot1:
@@ -1437,7 +1519,7 @@ with tab_calc:
 
     # PASKI PREMIOWE DO WYDRUKU
     st.markdown("---")
-    st.subheader("🧾 6. Imienne Paski Premiowe do Wydruku")
+    st.subheader("🧾 7. Imienne Paski Premiowe do Wydruku")
 
     col_print_sel, _ = st.columns([3, 1])
     with col_print_sel:
@@ -1497,6 +1579,15 @@ with tab_calc:
             hide_index=True,
         )
 
+      spec_details_html = ""
+      if e_det["spec_reasons_list"]:
+        spec_details_html = (
+            "<br><small style='color:#475569;'>Wykaz premii"
+            " specjalnych:<br>• "
+            + "<br>• ".join(e_det["spec_reasons_list"])
+            + "</small>"
+        )
+
       st.markdown(
           f"""
                 <hr style="border:1px dashed #cbd5e1; margin:15px 0;">
@@ -1505,7 +1596,7 @@ with tab_calc:
                         <p style="margin:2px 0;"><strong>Wynagrodzenie za nadgodziny:</strong> {e_det['total_ot']} godz. ({e_det['ot_pay']:,.2f} zł)</p>
                         <p style="margin:2px 0;"><strong>Dodatek za wózek widłowy:</strong> {e_det['forklift_pay']:,.2f} zł ({e_det['emp_forklift_hours']} h / {e_det['emp_forklift_pct']:.2f}%)</p>
                         <p style="margin:2px 0;"><strong>Dodatek za rozładunki/załadunki palet:</strong> {e_det['pallet_pay']:,.2f} zł</p>
-                        <p style="margin:2px 0;"><strong>Premie specjalne i uznaniowe:</strong> {e_det['spec_bonus_val']:,.2f} zł</p>
+                        <p style="margin:2px 0;"><strong>Premie specjalne i uznaniowe:</strong> {e_det['spec_bonus_val']:,.2f} zł {spec_details_html}</p>
                     </div>
                     <div style="background-color:#f1f5f9; padding:10px 15px; border-radius:8px; border:1px solid #cbd5e1;">
                         <span style="font-size:16px; font-weight:bold;">DO WYPŁATY 💡: </span>
@@ -1679,6 +1770,9 @@ with tab_settings:
   st.subheader("👥 Zespół i Pracownicy")
   edited_employees = st.data_editor(
       st.session_state.employees_df,
+      column_config={
+          "UPRAWNIENIA UDT": st.column_config.CheckboxColumn("Uprawnienia UDT")
+      },
       use_container_width=True,
       num_rows="dynamic",
       key="settings_employees_editor",
