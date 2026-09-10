@@ -16,7 +16,7 @@ import streamlit as st
 # KONFIGURACJA I STYLIZACJA CSS
 # ==========================================
 st.set_page_config(
-    page_title="System Rozliczania Harmonogramów v2.2",
+    page_title="System Rozliczania Harmonogramów v2.3",
     layout="wide",
     page_icon="📈",
 )
@@ -552,6 +552,7 @@ def calculate_payroll(
     selected_pallet_emps,
     daily_work_pct_map,
     special_bonuses_df,
+    include_absence_deduction=False,
 ):
   emp_summary = []
   emp_details_map = {}
@@ -601,13 +602,19 @@ def calculate_payroll(
     attendance_ratio = (
         (days_worked / scheduled_work_days) if scheduled_work_days > 0 else 0.0
     )
-    deduction_pct = (1.0 - attendance_ratio) * 100.0
+
+    if include_absence_deduction:
+      deduction_pct = (1.0 - attendance_ratio) * 100.0
+      effective_ratio = attendance_ratio
+    else:
+      deduction_pct = 0.0
+      effective_ratio = 1.0
 
     base_emp_bonus = max_bonus_per_emp
     if "KIEROWNIK" in str(position).upper() or "KIEROWNIK" in str(func).upper():
       base_emp_bonus *= st.session_state.kierownik_bonus_multiplier
 
-    calculated_bonus = base_emp_bonus * attendance_ratio
+    calculated_bonus = base_emp_bonus * effective_ratio
 
     emp_forklift_pct = (
         (emp_forklift_hours / total_forklift_hours * 100.0)
@@ -623,7 +630,6 @@ def calculate_payroll(
         pallet_pay_per_selected_emp if emp_name in selected_pallet_emps else 0.0
     )
 
-    # Naliczenie Premii Specjalnej
     spec_bonus_val = 0.0
     spec_reasons_list = []
     if (
@@ -1266,7 +1272,7 @@ with tab_calc:
             "Pozycje": st.column_config.NumberColumn(format="%.0f"),
             "Waga (kg)": st.column_config.NumberColumn(format="%.2f"),
             "% Sztuk": st.column_config.NumberColumn(format="%.2f %%"),
-            "% Pozycji": st.column_config.NumberColumn(format="%.2f %%"),
+            "% Pozycje": st.column_config.NumberColumn(format="%.2f %%"),
             "% Wagi": st.column_config.NumberColumn(format="%.2f %%"),
             "% Pracy w miesiącu": st.column_config.NumberColumn(
                 format="%.2f %%"
@@ -1444,6 +1450,30 @@ with tab_calc:
       if isinstance(edited_spec_bonuses, pd.DataFrame):
         st.session_state.special_bonuses_df = edited_spec_bonuses
 
+    # PRZEŁĄCZNIK WARIANTU ROZLICZENIA FREKWENCYJNEGO
+    st.markdown("---")
+    st.subheader("👥 6. Szczegółowe Rozliczenie Pracowników")
+
+    with st.container(border=True):
+      selected_variant = st.radio(
+          "⚙️ Wybierz wariant naliczania premii frekwencyjnej:",
+          options=[
+              "Wersja domyślna (bez potrąceń za nieobecności — 100% premii)",
+              "Wersja alternatywna (z potrąceniami za nieobecności)",
+          ],
+          index=0,
+          horizontal=True,
+          help=(
+              "Wersja domyślna wypłaca pełną kwotę premii wszystkim"
+              " pracownikom. Wersja alternatywna obniża wartość premii"
+              " proporcjonalnie do frekwencji."
+          ),
+      )
+
+    include_absence_deduction = (
+        "z potrąceniami" in str(selected_variant).lower()
+    )
+
     # OBLICZENIA I PODSUMOWANIE ZESPOŁU
     summary_df, emp_details_map = calculate_payroll(
         df_sched=df_sched,
@@ -1455,10 +1485,8 @@ with tab_calc:
         selected_pallet_emps=selected_pallet_emps,
         daily_work_pct_map=daily_work_pct_map,
         special_bonuses_df=st.session_state.special_bonuses_df,
+        include_absence_deduction=include_absence_deduction,
     )
-
-    st.markdown("---")
-    st.subheader("👥 6. Szczegółowe Rozliczenie Pracowników")
 
     col_tot1, col_tot2, col_tot3 = st.columns(3)
     with col_tot1:
@@ -1512,6 +1540,7 @@ with tab_calc:
               "pallets": manual_pallets,
               "indicator": indicator,
               "bonus_rate": bonus_rate,
+              "variant": selected_variant,
           },
       }
       save_archive(st.session_state.history_v2)
@@ -1539,6 +1568,14 @@ with tab_calc:
       if not e_det:
         continue
 
+      deduction_html_info = (
+          f'<p style="margin:3px 0; color:#dc2626;"><strong>Potrącenie za'
+          f' nieobecności:</strong> -{e_det["deduction_pct"]:.2f}%</p>'
+          if include_absence_deduction
+          else '<p style="margin:3px 0; color:#0284c7;"><strong>Wariant'
+          " premii:</strong> Bez potrąceń za nieobecności (100%)</p>"
+      )
+
       st.markdown(
           f"""
             <div class="pay-slip">
@@ -1553,8 +1590,8 @@ with tab_calc:
                         <p style="margin:3px 0;"><strong>Dni nieobecności:</strong> {e_det['absent_days']}</p>
                     </div>
                     <div style="text-align: right;">
-                        <p style="margin:3px 0;"><strong>Maks. premia za frekwencję 100%:</strong> {e_det['base_emp_bonus']:,.2f} zł</p>
-                        <p style="margin:3px 0; color:#dc2626;"><strong>Potrącenie za nieobecności:</strong> -{e_det['deduction_pct']:.2f}%</p>
+                        <p style="margin:3px 0;"><strong>Maks. premia bazowa:</strong> {e_det['base_emp_bonus']:,.2f} zł</p>
+                        {deduction_html_info}
                         <p style="margin:3px 0; font-size:18px; color:#16a34a;"><strong>Należna premia frekwencyjna:</strong> {e_det['calculated_bonus']:,.2f} zł</p>
                     </div>
                 </div>
