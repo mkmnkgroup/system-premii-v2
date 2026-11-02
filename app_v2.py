@@ -18,7 +18,7 @@ import streamlit as st
 # KONFIGURACJA I STYLIZACJA CSS
 # ==========================================
 st.set_page_config(
-    page_title="System Rozliczania Harmonogramów v2.5",
+    page_title="System Rozliczania Harmonogramów v2.6",
     layout="wide",
     page_icon="📈",
 )
@@ -43,9 +43,10 @@ st.markdown(
 )
 
 # ==========================================
-# OBSŁUGA ARCHIWUM PRZEZ GITHUB API
+# OBSŁUGA ARCHIWUM I USTAWIENI PRZEZ GITHUB / DYSK
 # ==========================================
 ARCHIVE_FILE = "archiwum_premii_v2.pkl"
+SETTINGS_FILE = "settings_v2.json"
 
 
 def get_github_repo():
@@ -115,6 +116,24 @@ def save_archive(archive_data):
         raise e
   except Exception as e:
     st.error(f"Nie udało się zapisać archiwum na GitHub: {e}")
+
+
+def load_persistent_settings():
+  if os.path.exists(SETTINGS_FILE):
+    try:
+      with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+    except Exception:
+      return {}
+  return {}
+
+
+def save_persistent_settings(settings_dict):
+  try:
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+      json.dump(settings_dict, f, ensure_ascii=False, indent=4)
+  except Exception as e:
+    st.error(f"Błąd zapisu ustawień: {e}")
 
 
 def normalize_name(name):
@@ -265,8 +284,10 @@ def process_attendance_photo(image_file, api_key):
 
 
 # ==========================================
-# DOMYŚLNE DANE SYSTEMOWE
+# DOMYŚLNE DANE SYSTEMOWE I WCZYTANIE ZAPISANYCH
 # ==========================================
+saved_settings = load_persistent_settings()
+
 DEFAULT_ABSENCE_CODES = [
     {"Oznaczenie": "Brak", "Rodzaj nieobecności": "Brak"},
     {"Oznaczenie": "Z", "Rodzaj nieobecności": "URLOP NA ŻĄDANIE"},
@@ -380,7 +401,7 @@ PL_DAYS = {
     6: "niedziela",
 }
 
-# Inicjalizacja Stanu Sesji
+# Inicjalizacja Stanu Sesji (z uwzględnieniem zapisanych ustawień)
 if "history_v2" not in st.session_state:
   st.session_state.history_v2 = load_archive()
 if "current_schedule_df" not in st.session_state:
@@ -389,8 +410,13 @@ if "absence_codes_df" not in st.session_state:
   st.session_state.absence_codes_df = pd.DataFrame(DEFAULT_ABSENCE_CODES)
 if "groups_df" not in st.session_state:
   st.session_state.groups_df = pd.DataFrame(DEFAULT_GROUPS)
+
 if "employees_df" not in st.session_state:
-  st.session_state.employees_df = pd.DataFrame(DEFAULT_EMPLOYEES)
+  if "employees_df" in saved_settings:
+    st.session_state.employees_df = pd.DataFrame(saved_settings["employees_df"])
+  else:
+    st.session_state.employees_df = pd.DataFrame(DEFAULT_EMPLOYEES)
+
 if "special_bonuses_df" not in st.session_state:
   st.session_state.special_bonuses_df = pd.DataFrame(
       columns=[
@@ -401,44 +427,52 @@ if "special_bonuses_df" not in st.session_state:
       ]
   )
 if "forklift_hours_df" not in st.session_state:
-  st.session_state.forklift_hours_df = pd.DataFrame([
-      {"OSOBA": emp["OSOBA"], "CZAS WÓZKA (godz.)": 0.0}
-      for emp in DEFAULT_EMPLOYEES
-  ])
+  current_emps_list = st.session_state.employees_df["OSOBA"].tolist()
+  st.session_state.forklift_hours_df = pd.DataFrame(
+      [{"OSOBA": name, "CZAS WÓZKA (godz.)": 0.0} for name in current_emps_list]
+  )
 if "imported_absences_df" not in st.session_state:
   st.session_state.imported_absences_df = pd.DataFrame()
 if "gemini_api_key" not in st.session_state:
   st.session_state.gemini_api_key = ""
 
-# Parametry
+# Parametry z zapisanych ustawień lub domyślne
 if "base_bonus_salary" not in st.session_state:
-  st.session_state.base_bonus_salary = 4300.0
+  st.session_state.base_bonus_salary = saved_settings.get(
+      "base_bonus_salary", 4300.0
+  )
 if "kierownik_bonus_multiplier" not in st.session_state:
-  st.session_state.kierownik_bonus_multiplier = 1.35
+  st.session_state.kierownik_bonus_multiplier = saved_settings.get(
+      "kierownik_bonus_multiplier", 1.35
+  )
 if "forklift_pool" not in st.session_state:
-  st.session_state.forklift_pool = 600.0
+  st.session_state.forklift_pool = saved_settings.get("forklift_pool", 600.0)
 if "rate_pallet" not in st.session_state:
-  st.session_state.rate_pallet = 10.0
+  st.session_state.rate_pallet = saved_settings.get("rate_pallet", 10.0)
 
 if "avg_lines_12m" not in st.session_state:
-  st.session_state.avg_lines_12m = 17322.50
+  st.session_state.avg_lines_12m = saved_settings.get(
+      "avg_lines_12m", 17322.50
+  )
 if "w_lines" not in st.session_state:
-  st.session_state.w_lines = 42.86
+  st.session_state.w_lines = saved_settings.get("w_lines", 42.86)
 if "avg_pcs_12m" not in st.session_state:
-  st.session_state.avg_pcs_12m = 58710.75
+  st.session_state.avg_pcs_12m = saved_settings.get("avg_pcs_12m", 58710.75)
 if "w_pcs" not in st.session_state:
-  st.session_state.w_pcs = 28.57
+  st.session_state.w_pcs = saved_settings.get("w_pcs", 28.57)
 if "avg_weight_12m" not in st.session_state:
-  st.session_state.avg_weight_12m = 26417.42
+  st.session_state.avg_weight_12m = saved_settings.get(
+      "avg_weight_12m", 26417.42
+  )
 if "w_weight" not in st.session_state:
-  st.session_state.w_weight = 28.57
+  st.session_state.w_weight = saved_settings.get("w_weight", 28.57)
 
 if "ot_kierownik" not in st.session_state:
-  st.session_state.ot_kierownik = 35.0
+  st.session_state.ot_kierownik = saved_settings.get("ot_kierownik", 35.0)
 if "ot_brygadzista" not in st.session_state:
-  st.session_state.ot_brygadzista = 30.0
+  st.session_state.ot_brygadzista = saved_settings.get("ot_brygadzista", 30.0)
 if "ot_magazynier" not in st.session_state:
-  st.session_state.ot_magazynier = 25.0
+  st.session_state.ot_magazynier = saved_settings.get("ot_magazynier", 25.0)
 
 
 # ==========================================
@@ -1142,844 +1176,3 @@ with tab_calc:
     )
   else:
     base_salary = st.session_state.base_bonus_salary
-    step_bonus_pct = 0.04
-
-    w_pcs_frac = st.session_state.w_pcs / 100.0
-    w_lines_frac = st.session_state.w_lines / 100.0
-    w_weight_frac = st.session_state.w_weight / 100.0
-
-    prod_df = pd.DataFrame()
-    if uploaded_month_file is not None:
-      prod_df = load_excel_cached(
-          uploaded_month_file.getvalue(), uploaded_month_file.name
-      )
-
-    df_sched = st.session_state.current_schedule_df
-    cur_pcs, cur_lines, cur_weight, cur_pallets = 0.0, 0.0, 0.0, 0.0
-
-    if not prod_df.empty:
-      cur_pcs = get_col_sum_flexible(prod_df, ["Sztuki", "sztuka"])
-      cur_lines = get_col_sum_flexible(prod_df, ["pozycje", "Pozycje"])
-      cur_weight = get_col_sum_flexible(
-          prod_df, ["Waga łączna", "Waga laczna", "Waga"]
-      )
-      cur_pallets = get_col_sum_flexible(
-          prod_df,
-          ["Palety", "Liczba palet", "Załadunki", "Paleciaki", "Paleta"],
-      )
-
-    dev_pcs = (
-        (cur_pcs - st.session_state.avg_pcs_12m) / st.session_state.avg_pcs_12m
-        if st.session_state.avg_pcs_12m > 0
-        else 0.0
-    )
-    dev_lines = (
-        (cur_lines - st.session_state.avg_lines_12m)
-        / st.session_state.avg_lines_12m
-        if st.session_state.avg_lines_12m > 0
-        else 0.0
-    )
-    dev_weight = (
-        (cur_weight - st.session_state.avg_weight_12m)
-        / st.session_state.avg_weight_12m
-        if st.session_state.avg_weight_12m > 0
-        else 0.0
-    )
-
-    indicator = (
-        dev_pcs * w_pcs_frac
-        + dev_lines * w_lines_frac
-        + dev_weight * w_weight_frac
-    )
-    bonus_rate = indicator * (step_bonus_pct / 0.10) if indicator > 0 else 0.0
-    max_bonus_per_emp = base_salary * bonus_rate
-
-    st.info(
-        f"💡 Podstawa premii: **{base_salary:,.2f} zł netto** | Mnożnik"
-        f" Kierownika: **{st.session_state.kierownik_bonus_multiplier:.2f}x**"
-        " | Pula na wózki:"
-        f" **{st.session_state.forklift_pool:,.2f} zł netto** | Stawka za"
-        f" paletę: **{st.session_state.rate_pallet:,.2f} zł netto**"
-    )
-
-    st.markdown("---")
-    st.subheader("📌 1. Miesięczne Wyniki Produkcyjne i Wskaźnik Wydajności")
-
-    comparison_data = [
-        {
-            "Parametr produkcyjny": "Pozycje",
-            "Wartość w miesiącu": cur_lines,
-            "Średnia roczna (baza)": st.session_state.avg_lines_12m,
-            "Różnica ilościowa": cur_lines - st.session_state.avg_lines_12m,
-            "Odchylenie procentowe (%)": dev_lines * 100,
-            "Waga wskaźnika (%)": st.session_state.w_lines,
-        },
-        {
-            "Parametr produkcyjny": "Sztuki",
-            "Wartość w miesiącu": cur_pcs,
-            "Średnia roczna (baza)": st.session_state.avg_pcs_12m,
-            "Różnica ilościowa": cur_pcs - st.session_state.avg_pcs_12m,
-            "Odchylenie procentowe (%)": dev_pcs * 100,
-            "Waga wskaźnika (%)": st.session_state.w_pcs,
-        },
-        {
-            "Parametr produkcyjny": "Waga towaru (kg)",
-            "Wartość w miesiącu": cur_weight,
-            "Średnia roczna (baza)": st.session_state.avg_weight_12m,
-            "Różnica ilościowa": cur_weight - st.session_state.avg_weight_12m,
-            "Odchylenie procentowe (%)": dev_weight * 100,
-            "Waga wskaźnika (%)": st.session_state.w_weight,
-        },
-    ]
-
-    st.dataframe(
-        pd.DataFrame(comparison_data),
-        column_config={
-            "Wartość w miesiącu": st.column_config.NumberColumn(
-                format="%.2f"
-            ),
-            "Średnia roczna (baza)": st.column_config.NumberColumn(
-                format="%.2f"
-            ),
-            "Różnica ilościowa": st.column_config.NumberColumn(format="%+.2f"),
-            "Odchylenie procentowe (%)": st.column_config.NumberColumn(
-                format="%+.2f %%"
-            ),
-            "Waga wskaźnika (%)": st.column_config.NumberColumn(
-                format="%.2f %%"
-            ),
-        },
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    col_m1, col_m2, col_m3 = st.columns(3)
-    with col_m1:
-      st.metric(
-          label="Zbiorczy Wskaźnik Wydajności",
-          value=f"{indicator * 100:+.2f}%".replace(".", ","),
-      )
-    with col_m2:
-      st.metric(
-          label="Należna Stawka Premii (%)",
-          value=f"{bonus_rate * 100:.2f}%".replace(".", ","),
-      )
-    with col_m3:
-      st.metric(
-          label="Maks. Premia Bazowa (Magazynier)",
-          value=f"{max_bonus_per_emp:,.2f} zł".replace(".", ","),
-      )
-
-    # DZIENNA ANALIZA
-    st.markdown("---")
-    st.subheader(
-        "📅 2. Dzienna Analiza Przyjęć i Rozkład Pracy (% Miesiąca)"
-    )
-
-    daily_map = parse_daily_production_cached(prod_df, gen_year, gen_month_idx)
-    days_in_month = calendar.monthrange(gen_year, gen_month_idx)[1]
-
-    daily_rows = []
-    daily_chart_data = []
-    daily_work_pct_map = {}
-
-    for day in range(1, days_in_month + 1):
-      date_obj = datetime(gen_year, gen_month_idx, day)
-      date_str = date_obj.strftime("%d.%m.%Y")
-      day_name = PL_DAYS[date_obj.weekday()]
-
-      pcs_d = daily_map[day]["pcs"]
-      lines_d = daily_map[day]["lines"]
-      weight_d = daily_map[day]["weight"]
-
-      pct_pcs_d = (pcs_d / cur_pcs * 100.0) if cur_pcs > 0 else 0.0
-      pct_lines_d = (lines_d / cur_lines * 100.0) if cur_lines > 0 else 0.0
-      pct_weight_d = (weight_d / cur_weight * 100.0) if cur_weight > 0 else 0.0
-
-      pct_work_d = (
-          (pct_pcs_d * w_pcs_frac)
-          + (pct_lines_d * w_lines_frac)
-          + (pct_weight_d * w_weight_frac)
-      )
-
-      daily_work_pct_map[day] = pct_work_d
-
-      daily_rows.append({
-          "Data": date_str,
-          "Dzień tygodnia": day_name,
-          "Sztuki": pcs_d,
-          "Pozycje": lines_d,
-          "Waga (kg)": weight_d,
-          "% Sztuk": pct_pcs_d,
-          "% Pozycji": pct_lines_d,
-          "% Wagi": pct_weight_d,
-          "% Pracy w miesiącu": pct_work_d,
-      })
-
-      daily_chart_data.append({
-          "Data": f"{day:02d}.{gen_month_idx:02d}",
-          "% Pracy": round(pct_work_d, 2),
-      })
-
-    st.dataframe(
-        pd.DataFrame(daily_rows),
-        column_config={
-            "Sztuki": st.column_config.NumberColumn(format="%.0f"),
-            "Pozycje": st.column_config.NumberColumn(format="%.0f"),
-            "Waga (kg)": st.column_config.NumberColumn(format="%.2f"),
-            "% Sztuk": st.column_config.NumberColumn(format="%.2f %%"),
-            "% Pozycji": st.column_config.NumberColumn(format="%.2f %%"),
-            "% Wagi": st.column_config.NumberColumn(format="%.2f %%"),
-            "% Pracy w miesiącu": st.column_config.NumberColumn(
-                format="%.2f %%"
-            ),
-        },
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    if cur_pcs > 0 or cur_lines > 0 or cur_weight > 0:
-      fig_daily = px.bar(
-          pd.DataFrame(daily_chart_data),
-          x="Data",
-          y="% Pracy",
-          title=(
-              "Dzienny rozkład nakładu pracy (% udziału w skali całego"
-              " miesiąca)"
-          ),
-          text_auto=".2f",
-          labels={"% Pracy": "% Udział w pracy"},
-      )
-      fig_daily.update_traces(marker_color="#1e3a8a")
-      st.plotly_chart(fig_daily, use_container_width=True)
-
-    # EWIDENCJA WÓZKA
-    st.markdown("---")
-    with st.container(border=True):
-      st.subheader(
-          "🚜 3. Ewidencja Czasu Pracy na Wózku Widłowym (z Książki Obsługi)"
-      )
-      st.markdown(
-          "Wpisz poniżej liczbę godzin obsługi wózka dla każdego z pracowników"
-          " w tym miesiącu. System automatycznie wyliczy 100% czasu obsługi"
-          f" w zespole i podzieli pulę **{st.session_state.forklift_pool:,.2f}"
-          " zł netto**."
-      )
-
-      emp_list_df = st.session_state.employees_df[
-          ["OSOBA", "UPRAWNIENIA UDT"]
-      ].copy()
-      merged_forklift = pd.merge(
-          emp_list_df, st.session_state.forklift_hours_df, on="OSOBA", how="left"
-      ).fillna({"CZAS WÓZKA (godz.)": 0.0})
-
-      forklift_editor_df = st.data_editor(
-          merged_forklift,
-          column_config={
-              "OSOBA": st.column_config.TextColumn("Pracownik", disabled=True),
-              "UPRAWNIENIA UDT": st.column_config.CheckboxColumn(
-                  "Uprawnienia UDT", disabled=True
-              ),
-              "CZAS WÓZKA (godz.)": st.column_config.NumberColumn(
-                  "Liczba godzin na wózku (h)",
-                  min_value=0.0,
-                  max_value=300.0,
-                  step=0.5,
-              ),
-          },
-          use_container_width=True,
-          hide_index=True,
-          key="forklift_hours_editor",
-      )
-
-      if isinstance(forklift_editor_df, pd.DataFrame):
-        st.session_state.forklift_hours_df = forklift_editor_df[
-            ["OSOBA", "CZAS WÓZKA (godz.)"]
-        ]
-
-      total_forklift_hours = pd.to_numeric(
-          st.session_state.forklift_hours_df["CZAS WÓZKA (godz.)"],
-          errors="coerce",
-      ).sum()
-
-      col_fk1, col_fk2 = st.columns(2)
-      with col_fk1:
-        st.metric(
-            label="Łączny Czas Obsługi Wózka w Zespole (100%)",
-            value=f"{total_forklift_hours:.1f} godz.",
-        )
-      with col_fk2:
-        st.metric(
-            label="Zbiorcza Pula za Wózki do Podziału",
-            value=f"{st.session_state.forklift_pool:,.2f} zł netto",
-        )
-
-    # PODZIAŁ PALET
-    st.markdown("---")
-    with st.container(border=True):
-      st.subheader("📦 4. Podział Premii za Rozładunki / Załadunki Palet")
-
-      unique_emps = (
-          st.session_state.employees_df["OSOBA"].dropna().unique().tolist()
-      )
-
-      col_pal1, col_pal2, col_pal3 = st.columns(3)
-      with col_pal1:
-        manual_pallets = st.number_input(
-            "Liczba palet w miesiącu:",
-            value=float(cur_pallets),
-            min_value=0.0,
-            step=1.0,
-        )
-
-      total_pallet_pool = manual_pallets * st.session_state.rate_pallet
-
-      with col_pal2:
-        st.metric(
-            label="Łączna Pula za Palety (netto)",
-            value=f"{total_pallet_pool:,.2f} zł",
-        )
-      with col_pal3:
-        st.metric(
-            label="Stawka za 1 szt. palety",
-            value=f"{st.session_state.rate_pallet:,.2f} zł",
-        )
-
-      selected_pallet_emps = st.multiselect(
-          "Zaznacz pracowników uwzględnionych w podziale premii za palety:",
-          options=unique_emps,
-          default=unique_emps,
-          key="pallet_emp_multiselect",
-      )
-
-      num_selected_pallet_emps = len(selected_pallet_emps)
-      pallet_pay_per_selected_emp = (
-          (total_pallet_pool / num_selected_pallet_emps)
-          if num_selected_pallet_emps > 0
-          else 0.0
-      )
-
-      if num_selected_pallet_emps > 0:
-        st.success(
-            f"Pula **{total_pallet_pool:,.2f} zł** dzielona jest na"
-            f" **{num_selected_pallet_emps}** wybranych pracowników ("
-            f"**{pallet_pay_per_selected_emp:,.2f} zł netto** na osobę)."
-        )
-      else:
-        st.warning(
-            "Nie zaznaczono żadnego pracownika do podziału premii za palety."
-        )
-
-    # PREMIA SPECJALNA / UZNANIOWA
-    st.markdown("---")
-    with st.container(border=True):
-      st.subheader("⭐ 5. Premie Specjalne i Uznaniowe")
-      st.markdown(
-          "Wprowadź poniżej ewentualne dodatkowe premie specjalne przyznane"
-          " pracownikom w danym miesiącu. Możesz dodawać dowolną liczbę"
-          " wierszy."
-      )
-
-      edited_spec_bonuses = st.data_editor(
-          st.session_state.special_bonuses_df,
-          column_config={
-              "Pracownik": st.column_config.SelectboxColumn(
-                  "Pracownik", options=unique_emps, required=True
-              ),
-              "Kwota netto premii": st.column_config.NumberColumn(
-                  "Kwota netto (zł)",
-                  min_value=0.0,
-                  step=50.0,
-                  format="%.2f zł",
-              ),
-              "Powód przyznania premii": st.column_config.TextColumn(
-                  "Za co przyznana / Powód"
-              ),
-              "Kto przyznał": st.column_config.TextColumn("Kto przyznał"),
-          },
-          num_rows="dynamic",
-          use_container_width=True,
-          hide_index=True,
-          key="special_bonuses_editor",
-      )
-
-      if isinstance(edited_spec_bonuses, pd.DataFrame):
-        st.session_state.special_bonuses_df = edited_spec_bonuses
-
-    # PRZEŁĄCZNIK WARIANTU ROZLICZENIA FREKWENCYJNEGO
-    st.markdown("---")
-    st.subheader("👥 6. Szczegółowe Rozliczenie Pracowników")
-
-    with st.container(border=True):
-      selected_variant = st.radio(
-          "⚙️ Wybierz wariant naliczania premii frekwencyjnej:",
-          options=[
-              "Wersja domyślna (bez potrąceń za nieobecności — 100% premii)",
-              "Wersja alternatywna (z potrąceniami za nieobecności)",
-          ],
-          index=0,
-          horizontal=True,
-          help=(
-              "Wersja domyślna wypłaca pełną kwotę premii wszystkim"
-              " pracownikom. Wersja alternatywna obniża wartość premii"
-              " proporcjonalnie do frekwencji."
-          ),
-      )
-
-    include_absence_deduction = (
-        "z potrąceniami" in str(selected_variant).lower()
-    )
-
-    # OBLICZENIA I PODSUMOWANIE ZESPOŁU
-    summary_df, emp_details_map = calculate_payroll(
-        df_sched=df_sched,
-        employees_df=st.session_state.employees_df,
-        max_bonus_per_emp=max_bonus_per_emp,
-        forklift_hours_df=st.session_state.forklift_hours_df,
-        total_forklift_hours=total_forklift_hours,
-        pallet_pay_per_selected_emp=pallet_pay_per_selected_emp,
-        selected_pallet_emps=selected_pallet_emps,
-        daily_work_pct_map=daily_work_pct_map,
-        special_bonuses_df=st.session_state.special_bonuses_df,
-        include_absence_deduction=include_absence_deduction,
-    )
-
-    col_tot1, col_tot2, col_tot3 = st.columns(3)
-    with col_tot1:
-      st.metric(
-          label="Łączna Kwota Wypłat i Dodatków",
-          value=f"{summary_df['ŁĄCZNA PREMIA / DODATKI (zł)'].sum():,.2f} zł",
-      )
-    with col_tot2:
-      st.metric(
-          label="Suma Nadgodzin Zespołu",
-          value=f"{summary_df['Nadgodziny (godz.)'].sum():,.1f} h",
-      )
-    with col_tot3:
-      st.metric(
-          label="Wykorzystanie Puli Wózków",
-          value=f"{summary_df['Dodatek Wózek (zł)'].sum():,.2f} zł",
-      )
-
-    st.dataframe(
-        summary_df,
-        column_config={
-            "% Potrącenia": st.column_config.NumberColumn(format="%.2f %%"),
-            "% Udział wózek": st.column_config.NumberColumn(format="%.2f %%"),
-            "Dodatek Wózek (zł)": st.column_config.NumberColumn(
-                format="%.2f zł"
-            ),
-            "Dodatek Palety (zł)": st.column_config.NumberColumn(
-                format="%.2f zł"
-            ),
-            "Nadgodziny (zł)": st.column_config.NumberColumn(format="%.2f zł"),
-            "Premia (zł)": st.column_config.NumberColumn(format="%.2f zł"),
-            "Premia Specjalna (zł)": st.column_config.NumberColumn(
-                format="%.2f zł"
-            ),
-            "ŁĄCZNA PREMIA / DODATKI (zł)": st.column_config.NumberColumn(
-                format="%.2f zł"
-            ),
-        },
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    col_save1, col_save2 = st.columns(2)
-
-    with col_save1:
-      if st.button(
-          "💾 Zapisz rozliczenie do Archiwum Historycznego",
-          use_container_width=True,
-      ):
-        st.session_state.history_v2[period_key] = {
-            "summary": summary_df,
-            "schedule": df_sched,
-            "metrics": {
-                "pcs": cur_pcs,
-                "lines": cur_lines,
-                "weight": cur_weight,
-                "pallets": manual_pallets,
-                "indicator": indicator,
-                "bonus_rate": bonus_rate,
-                "variant": selected_variant,
-            },
-        }
-        save_archive(st.session_state.history_v2)
-        st.success(f"Zarchiwizowano rozliczenie za okres {period_key}!")
-
-    with col_save2:
-      hr_buffer = io.BytesIO()
-      with pd.ExcelWriter(hr_buffer, engine="openpyxl") as writer:
-        summary_df.to_excel(writer, index=False, sheet_name="Rozliczenie_HR")
-      hr_buffer.seek(0)
-
-      st.download_button(
-          label="📊 Pobierz Rozliczenie dla HR (Excel)",
-          data=hr_buffer,
-          file_name=f"Rozliczenie_HR_{period_key.replace(' ', '_')}.xlsx",
-          mime=(
-              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          ),
-          use_container_width=True,
-      )
-
-    # PASKI PREMIOWE DO WYDRUKU
-    st.markdown("---")
-    st.subheader("🧾 7. Imienne Paski Premiowe do Wydruku")
-
-    col_print_sel, _ = st.columns([3, 1])
-    with col_print_sel:
-      selected_slip_emp = st.selectbox(
-          "Wybierz pracownika do wygenerowania paska (lub wszystkich):",
-          ["WSZYSCY PRACOWNICY"] + unique_emps,
-      )
-
-    emps_to_render = (
-        unique_emps
-        if selected_slip_emp == "WSZYSCY PRACOWNICY"
-        else [selected_slip_emp]
-    )
-
-    for e_name in emps_to_render:
-      e_det = emp_details_map.get(e_name)
-      if not e_det:
-        continue
-
-      deduction_html_info = (
-          f'<p style="margin:3px 0; color:#dc2626;"><strong>Potrącenie za'
-          f' nieobecności:</strong> -{e_det["deduction_pct"]:.2f}%</p>'
-          if include_absence_deduction
-          else '<p style="margin:3px 0; color:#0284c7;"><strong>Wariant'
-          " premii:</strong> Bez potrąceń za nieobecności (100%)</p>"
-      )
-
-      st.markdown(
-          f"""
-            <div class="pay-slip">
-                <div class="pay-slip-header">
-                    <h3 style="margin:0; color:#1e3a8a;">PASEK ROZLICZENIA PREMIOWEGO — {period_key.upper()}</h3>
-                    <p style="margin:5px 0 0 0; font-size:16px;"><strong>Pracownik:</strong> {e_name} | <strong>Stanowisko:</strong> {e_det['position']}</p>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
-                    <div>
-                        <p style="margin:3px 0;"><strong>Dni planowane:</strong> {e_det['scheduled_days']}</p>
-                        <p style="margin:3px 0;"><strong>Dni przepracowane:</strong> {e_det['days_worked']}</p>
-                        <p style="margin:3px 0;"><strong>Dni nieobecności:</strong> {e_det['absent_days']}</p>
-                    </div>
-                    <div style="text-align: right;">
-                        <p style="margin:3px 0;"><strong>Maks. premia bazowa:</strong> {e_det['base_emp_bonus']:,.2f} zł</p>
-                        {deduction_html_info}
-                        <p style="margin:3px 0; font-size:18px; color:#16a34a;"><strong>Należna premia frekwencyjna:</strong> {e_det['calculated_bonus']:,.2f} zł</p>
-                    </div>
-                </div>
-            """,
-          unsafe_allow_html=True,
-      )
-
-      st.markdown("**📅 Wykaz Dni Nieobecności:**")
-      abs_df_view = e_det["absences_table"]
-
-      if abs_df_view.empty:
-        st.success("Brak nieobecności w tym miesiącu — 100% frekwencji!")
-      else:
-        st.dataframe(
-            abs_df_view,
-            column_config={
-                "Udział pracy w miesiącu (%)": st.column_config.NumberColumn(
-                    format="%.2f %%"
-                )
-            },
-            use_container_width=True,
-            hide_index=True,
-        )
-
-      spec_details_html = ""
-      if e_det["spec_reasons_list"]:
-        spec_details_html = (
-            "<br><small style='color:#475569;'>Wykaz premii"
-            " specjalnych:<br>• "
-            + "<br>• ".join(e_det["spec_reasons_list"])
-            + "</small>"
-        )
-
-      st.markdown(
-          f"""
-                <hr style="border:1px dashed #cbd5e1; margin:15px 0;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <p style="margin:2px 0;"><strong>Wynagrodzenie za nadgodziny:</strong> {e_det['total_ot']} godz. ({e_det['ot_pay']:,.2f} zł)</p>
-                        <p style="margin:2px 0;"><strong>Dodatek za wózek widłowy:</strong> {e_det['forklift_pay']:,.2f} zł ({e_det['emp_forklift_hours']} h / {e_det['emp_forklift_pct']:.2f}%)</p>
-                        <p style="margin:2px 0;"><strong>Dodatek za rozładunki/załadunki palet:</strong> {e_det['pallet_pay']:,.2f} zł</p>
-                        <p style="margin:2px 0;"><strong>Premie specjalne i uznaniowe:</strong> {e_det['spec_bonus_val']:,.2f} zł {spec_details_html}</p>
-                    </div>
-                    <div style="background-color:#f1f5f9; padding:10px 15px; border-radius:8px; border:1px solid #cbd5e1;">
-                        <span style="font-size:16px; font-weight:bold;">DO WYPŁATY 💡: </span>
-                        <span style="font-size:22px; font-weight:bold; color:#1e3a8a;">{e_det['total_payout']:,.2f} zł netto</span>
-                    </div>
-                </div>
-            </div>
-            """,
-          unsafe_allow_html=True,
-      )
-
-# ==========================================
-# ZAKŁADKA 3: DASHBOARD
-# ==========================================
-with tab_dash:
-  st.header("📊 Dashboard Analityczny")
-  if period_key in st.session_state.history_v2:
-    data_hist = st.session_state.history_v2[period_key]
-    sum_df = data_hist["summary"]
-
-    col_d1, col_d2 = st.columns(2)
-    with col_d1:
-      fig_payout = px.bar(
-          sum_df,
-          x="Pracownik",
-          y="ŁĄCZNA PREMIA / DODATKI (zł)",
-          title="Łączne wypłaty dodatkowe wg pracowników",
-          color="Stanowisko",
-          text_auto=".2f",
-      )
-      st.plotly_chart(fig_payout, use_container_width=True)
-
-    with col_d2:
-      fig_ot = px.pie(
-          sum_df,
-          names="Pracownik",
-          values="Nadgodziny (godz.)",
-          title="Udział nadgodzin w zespole",
-      )
-      st.plotly_chart(fig_ot, use_container_width=True)
-  else:
-    st.info(
-        "Zapisz rozliczenie do archiwum w zakładce Kalkulator Premii, aby"
-        " wyświetlić wykresy."
-    )
-
-# ==========================================
-# ZAKŁADKA 4: ARCHIWUM
-# ==========================================
-with tab_history:
-  st.header("📁 Archiwum Zapisanych Rozliczeń")
-  if st.session_state.history_v2:
-    selected_period = st.selectbox(
-        "Wybierz okres z archiwum:", list(st.session_state.history_v2.keys())
-    )
-    if selected_period:
-      st.subheader(f"Rozliczenie dla: {selected_period}")
-      st.dataframe(
-          st.session_state.history_v2[selected_period]["summary"],
-          use_container_width=True,
-      )
-  else:
-    st.info("Brak zapisanych okresów w archiwum.")
-
-# ==========================================
-# ZAKŁADKA 5: PORÓWNANIE
-# ==========================================
-with tab_comp:
-  st.header("📈 Porównanie Okresów Historycznych")
-  if len(st.session_state.history_v2) >= 2:
-    periods = list(st.session_state.history_v2.keys())
-    p1, p2 = st.columns(2)
-    with p1:
-      period_a = st.selectbox("Wybierz pierwszy okres:", periods, index=0)
-    with p2:
-      period_b = st.selectbox(
-          "Wybierz drugi okres:", periods, index=min(1, len(periods) - 1)
-      )
-
-    if period_a and period_b:
-      data_a = st.session_state.history_v2[period_a]
-      data_b = st.session_state.history_v2[period_b]
-
-      df_a = data_a["summary"]
-      df_b = data_b["summary"]
-      met_a = data_a.get("metrics", {})
-      met_b = data_b.get("metrics", {})
-
-      st.markdown("---")
-      st.subheader("📊 1. Porównanie Wyników Produkcyjnych (Miesiąc do Miesiąca)")
-
-      prod_comp_data = [
-          {
-              "Parametr": "Sztuki (pcs)",
-              f"Okres: {period_a}": met_a.get("pcs", 0.0),
-              f"Okres: {period_b}": met_b.get("pcs", 0.0),
-              "Różnica": met_b.get("pcs", 0.0) - met_a.get("pcs", 0.0),
-          },
-          {
-              "Parametr": "Pozycje (lines)",
-              f"Okres: {period_a}": met_a.get("lines", 0.0),
-              f"Okres: {period_b}": met_b.get("lines", 0.0),
-              "Różnica": met_b.get("lines", 0.0) - met_a.get("lines", 0.0),
-          },
-          {
-              "Parametr": "Waga (kg)",
-              f"Okres: {period_a}": met_a.get("weight", 0.0),
-              f"Okres: {period_b}": met_b.get("weight", 0.0),
-              "Różnica": met_b.get("weight", 0.0) - met_a.get("weight", 0.0),
-          },
-          {
-              "Parametr": "Liczba palet",
-              f"Okres: {period_a}": met_a.get("pallets", 0.0),
-              f"Okres: {period_b}": met_b.get("pallets", 0.0),
-              "Różnica": met_b.get("pallets", 0.0) - met_a.get("pallets", 0.0),
-          },
-          {
-              "Parametr": "Zbiorczy Wskaźnik Wydajności (%)",
-              f"Okres: {period_a}": met_a.get("indicator", 0.0) * 100,
-              f"Okres: {period_b}": met_b.get("indicator", 0.0) * 100,
-              "Różnica": (met_b.get("indicator", 0.0) - met_a.get("indicator", 0.0)) * 100,
-          },
-      ]
-      st.dataframe(
-          pd.DataFrame(prod_comp_data),
-          column_config={
-              "Różnica": st.column_config.NumberColumn(format="%+.2f"),
-          },
-          use_container_width=True,
-          hide_index=True,
-      )
-
-      st.markdown("---")
-      st.subheader("💰 2. Porównanie Składowych Premii i Bonusów (Zespół)")
-
-      sum_cols_to_compare = [
-          "Premia (zł)",
-          "Premia Specjalna (zł)",
-          "Dodatek Wózek (zł)",
-          "Dodatek Palety (zł)",
-          "Nadgodziny (zł)",
-          "ŁĄCZNA PREMIA / DODATKI (zł)",
-      ]
-
-      totals_a = {col: df_a[col].sum() for col in sum_cols_to_compare if col in df_a.columns}
-      totals_b = {col: df_b[col].sum() for col in sum_cols_to_compare if col in df_b.columns}
-
-      bonus_comp_rows = []
-      for col in sum_cols_to_compare:
-        if col in totals_a and col in totals_b:
-          val_a = totals_a[col]
-          val_b = totals_b[col]
-          bonus_comp_rows.append({
-              "Składowa wynagrodzenia": col,
-              f"Okres: {period_a}": val_a,
-              f"Okres: {period_b}": val_b,
-              "Różnica (zł)": val_b - val_a,
-          })
-
-      st.dataframe(
-          pd.DataFrame(bonus_comp_rows),
-          column_config={
-              f"Okres: {period_a}": st.column_config.NumberColumn(format="%.2f zł"),
-              f"Okres: {period_b}": st.column_config.NumberColumn(format="%.2f zł"),
-              "Różnica (zł)": st.column_config.NumberColumn(format="%+.2f zł"),
-          },
-          use_container_width=True,
-          hide_index=True,
-      )
-
-      st.markdown("---")
-      st.subheader("👥 3. Porównanie Łącznych Wypłat per Pracownik")
-      comp_df = pd.merge(
-          df_a[["Pracownik", "ŁĄCZNA PREMIA / DODATKI (zł)"]],
-          df_b[["Pracownik", "ŁĄCZNA PREMIA / DODATKI (zł)"]],
-          on="Pracownik",
-          suffixes=(f" ({period_a})", f" ({period_b})"),
-      )
-      st.dataframe(comp_df, use_container_width=True, hide_index=True)
-  else:
-    st.info("Wymagane są co najmniej 2 zapisane okresy w archiwum.")
-
-# ==========================================
-# ZAKŁADKA 6: USTAWIENIA
-# ==========================================
-with tab_settings:
-  st.header("⚙️ Ustawienia Parametrów i Stałych Systemowych")
-
-  col_set1, col_set2 = st.columns(2)
-
-  with col_set1:
-    with st.container(border=True):
-      st.subheader("💰 Podstawa Premiowa i Dodatki")
-      st.session_state.base_bonus_salary = st.number_input(
-          "Podstawa premii (zł netto):",
-          value=float(st.session_state.base_bonus_salary),
-          step=100.0,
-      )
-      st.session_state.kierownik_bonus_multiplier = st.number_input(
-          "Mnożnik premii dla Kierownika:",
-          value=float(st.session_state.kierownik_bonus_multiplier),
-          step=0.05,
-          format="%.2f",
-      )
-      st.session_state.forklift_pool = st.number_input(
-          "Zbiorcza pula dodatku za wózek (zł netto):",
-          value=float(st.session_state.forklift_pool),
-          step=50.0,
-      )
-      st.session_state.rate_pallet = st.number_input(
-          "Stawka za 1 szt. palety (zł netto):",
-          value=float(st.session_state.rate_pallet),
-          step=0.5,
-          format="%.2f",
-      )
-
-    with st.container(border=True):
-      st.subheader("⏱️ Stawki za Nadgodziny (zł/h)")
-      st.session_state.ot_kierownik = st.number_input(
-          "Kierownik:", value=float(st.session_state.ot_kierownik), step=5.0
-      )
-      st.session_state.ot_brygadzista = st.number_input(
-          "Brygadzista:", value=float(st.session_state.ot_brygadzista), step=5.0
-      )
-      st.session_state.ot_magazynier = st.number_input(
-          "Magazynier:", value=float(st.session_state.ot_magazynier), step=5.0
-      )
-
-  with col_set2:
-    with st.container(border=True):
-      st.subheader("📊 Średnie Roczne i Wagi")
-      st.session_state.avg_pcs_12m = st.number_input(
-          "Średnia roczna - Sztuki:",
-          value=float(st.session_state.avg_pcs_12m),
-          step=1000.0,
-      )
-      st.session_state.w_pcs = st.number_input(
-          "Waga - Sztuki (%):", value=float(st.session_state.w_pcs), step=1.0
-      )
-
-      st.session_state.avg_lines_12m = st.number_input(
-          "Średnia roczna - Pozycje:",
-          value=float(st.session_state.avg_lines_12m),
-          step=500.0,
-      )
-      st.session_state.w_lines = st.number_input(
-          "Waga - Pozycje (%):", value=float(st.session_state.w_lines), step=1.0
-      )
-
-      st.session_state.avg_weight_12m = st.number_input(
-          "Średnia roczna - Waga (kg):",
-          value=float(st.session_state.avg_weight_12m),
-          step=1000.0,
-      )
-      st.session_state.w_weight = st.number_input(
-          "Waga - Waga (%):", value=float(st.session_state.w_weight), step=1.0
-      )
-
-  st.markdown("---")
-  st.subheader("👥 Zespół i Pracownicy")
-  edited_employees = st.data_editor(
-      st.session_state.employees_df,
-      column_config={
-          "UPRAWNIENIA UDT": st.column_config.CheckboxColumn("Uprawnienia UDT")
-      },
-      use_container_width=True,
-      num_rows="dynamic",
-      key="settings_employees_editor",
-  )
-  if isinstance(edited_employees, pd.DataFrame):
-    st.session_state.employees_df = edited_employees
