@@ -1,3 +1,4 @@
+import base64
 import calendar
 from datetime import datetime
 import io
@@ -5,6 +6,7 @@ import json
 import os
 import pickle
 import re
+from github import Github, GithubException
 import google.generativeai as genai
 import holidays
 import pandas as pd
@@ -41,24 +43,81 @@ st.markdown(
 )
 
 # ==========================================
-# CACHE I MECHANIZMY POMOCNICZE
+# OBSŁUGA ARCHIWUM PRZEZ GITHUB API
 # ==========================================
 ARCHIVE_FILE = "archiwum_premii_v2.pkl"
 
 
+def get_github_repo():
+  try:
+    token = st.secrets["GITHUB_TOKEN"]
+    repo_name = st.secrets["GITHUB_REPO"]
+    g = Github(token)
+    return g.get_repo(repo_name)
+  except Exception:
+    return None
+
+
 def load_archive():
-  if os.path.exists(ARCHIVE_FILE):
-    try:
-      with open(ARCHIVE_FILE, "rb") as f:
-        return pickle.load(f)
-    except Exception:
+  repo = get_github_repo()
+  if not repo:
+    # Fallback lokalny do testów na komputerze
+    if os.path.exists(ARCHIVE_FILE):
+      try:
+        with open(ARCHIVE_FILE, "rb") as f:
+          return pickle.load(f)
+      except Exception:
+        return {}
+    return {}
+
+  try:
+    file_content = repo.get_contents(ARCHIVE_FILE)
+    decoded_data = base64.b64decode(file_content.content)
+    return pickle.loads(decoded_data)
+  except GithubException as e:
+    if e.status == 404:
+      return {}  # Plik jeszcze nie istnieje w repozytorium
+    else:
       return {}
-  return {}
+  except Exception:
+    return {}
 
 
 def save_archive(archive_data):
-  with open(ARCHIVE_FILE, "wb") as f:
-    pickle.dump(archive_data, f)
+  # Zapis lokalny (dla bezpieczeństwa podczas testów na PC)
+  try:
+    with open(ARCHIVE_FILE, "wb") as f:
+      pickle.dump(archive_data, f)
+  except Exception:
+    pass
+
+  # Zapis w chmurze na GitHubie
+  repo = get_github_repo()
+  if not repo:
+    return
+
+  pickled_data = pickle.dumps(archive_data)
+  encoded_data = base64.b64encode(pickled_data).decode("utf-8")
+  commit_message = "Automatyczna aktualizacja archiwum premii z Streamlit"
+
+  try:
+    try:
+      file = repo.get_contents(ARCHIVE_FILE)
+      repo.update_file(
+          path=ARCHIVE_FILE,
+          message=commit_message,
+          content=encoded_data,
+          sha=file.sha,
+      )
+    except GithubException as e:
+      if e.status == 404:
+        repo.create_file(
+            path=ARCHIVE_FILE, message=commit_message, content=encoded_data
+        )
+      else:
+        raise e
+  except Exception as e:
+    st.error(f"Nie udało się zapisać archiwum na GitHub: {e}")
 
 
 def normalize_name(name):
